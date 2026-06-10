@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Sync104ToBpmErp": {
+      "commandName": "Project",
+      "commandLineArgs": "--test-api"
+    }
+  }
+}
