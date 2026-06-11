@@ -26,10 +26,8 @@ namespace Sync104ToBpmErp.Services
         }
 
         /// <summary>
-        /// 執行完整同步流程
+        /// 執行完整同步流程（支援多公司）
         /// </summary>
-        /// <param name="startTime">開始時間</param>
-        /// <param name="endTime">截止時間</param>
         public async Task<SyncReport> RunFullSyncAsync(DateTime startTime, DateTime endTime)
         {
             var report = new SyncReport
@@ -51,14 +49,50 @@ namespace Sync104ToBpmErp.Services
                 // 測試資料庫連線
                 await TestConnectionsAsync();
 
-                // 1. 同步員工資料
-                await SyncEmployeesAsync(startTime, endTime, report);
+                // ═══════════════════════════════════════════════
+                // Step 1: 取得公司清單（取代 appsettings CompanyId）
+                // ═══════════════════════════════════════════════
+                var companies = await _hrApiService.GetCompaniesAsync();
+                if (companies.Count == 0)
+                {
+                    _logger.Warning("[HR API] 回傳的公司資料為空，無法繼續同步");
+                    report.Success = true;
+                    report.EndTime = DateTime.Now;
+                    report.Duration = report.EndTime - report.StartTime;
+                    return report;
+                }
 
-                // 2. 同步部門資料
-                await SyncDepartmentsAsync(startTime, endTime, report);
+                _logger.Info($"[公司清單] 取得 {companies.Count} 筆公司資料");
+                foreach (var c in companies)
+                {
+                    _logger.Info($"  CO_ID={c.CompanyId}, CO_CODE={c.CompanyCode}, CO_NAME={c.CompanyName}");
+                }
 
-                // 3. 同步部門層級資料
-                await SyncDeptHierarchyAsync(report);
+                // Step 1.5: 先將公司資料寫入 BPM Organization 表
+                var orgResult = await _bpmDatabaseService.SyncOrganizationAsync(companies);
+                report.BpmOrganizationResult = orgResult;
+
+                // ═══════════════════════════════════════════════
+                // Step 2: 依公司 Loop 執行同步
+                // ═══════════════════════════════════════════════
+                foreach (var company in companies)
+                {
+                    var coId = company.CompanyId;
+                    var coCode = company.CompanyCode;
+
+                    _logger.Info("============================================");
+                    _logger.Info($"[公司處理] 開始處理公司 CO_ID={coId}, CO_CODE={coCode}");
+                    _logger.Info("============================================");
+
+                    // ─── 2.2 部門層級資料（先同步，供部門參考） ───
+                    await SyncDeptHierarchyAsync(coId, report);
+
+                    // ─── 2.1 部門資料 ───
+                    await SyncDepartmentsAsync(startTime, endTime, coId, coCode, report);
+
+                    // ─── 2.3 員工資料 ───
+                    await SyncEmployeesAsync(startTime, endTime, coId, report);
+                }
 
                 report.Success = true;
             }
@@ -107,130 +141,131 @@ namespace Sync104ToBpmErp.Services
         }
 
         /// <summary>
-        /// 同步員工資料
+        /// 2.1 同步部門資料（寫入 BPM OrganizationUnit + ERP gem_file）
         /// </summary>
-        private async Task SyncEmployeesAsync(DateTime startTime, DateTime endTime, SyncReport report)
+        private async Task SyncDepartmentsAsync(DateTime startTime, DateTime endTime, long coId, string coCode, SyncReport report)
         {
-            _logger.LogSyncStart("Employee", startTime, endTime);
-
-            try
-            {
-                // 從 HR API 取得員工資料
-                var employees = await _hrApiService.GetEmployeesAsync(startTime, endTime);
-
-                if (employees.Count == 0)
-                {
-                    _logger.Warning("[HR API] 回傳的員工資料為空");
-                    return;
-                }
-
-                _logger.Info($"[同步處理] 開始同步 {employees.Count} 筆員工資料到 BPM 和 ERP...");
-
-                // 同步到 BPM
-                _logger.Info("[同步處理] 正在同步到 BPM...");
-                var bpmResult = await _bpmDatabaseService.SyncEmployeesAsync(employees);
-                report.BpmEmployeeResult = bpmResult;
-
-                // 同步到 ERP
-                _logger.Info("[同步處理] 正在同步到 ERP...");
-                var erpResult = await _erpDatabaseService.SyncEmployeesAsync(employees);
-                report.ErpEmployeeResult = erpResult;
-
-                // 總結
-                var totalSuccess = bpmResult.SuccessCount + erpResult.SuccessCount;
-                var totalFailed = bpmResult.FailedCount + erpResult.FailedCount;
-                _logger.Info($"[同步完成] 員工資料同步完成 - BPM: {bpmResult.SuccessCount}/{bpmResult.TotalCount}, ERP: {erpResult.SuccessCount}/{erpResult.TotalCount}");
-            }
-            catch (Exception ex)
-            {
-                _logger.Error("[同步錯誤] 同步員工資料時發生錯誤", ex);
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// 同步部門資料
-        /// </summary>
-        private async Task SyncDepartmentsAsync(DateTime startTime, DateTime endTime, SyncReport report)
-        {
-            _logger.LogSyncStart("Department", startTime, endTime);
+            _logger.LogSyncStart($"Department (CO_ID={coId})", startTime, endTime);
 
             try
             {
                 // 從 HR API 取得部門資料
-                var departments = await _hrApiService.GetDepartmentsAsync(startTime, endTime);
+                var departments = await _hrApiService.GetDepartmentsAsync(startTime, endTime, coId);
 
                 if (departments.Count == 0)
                 {
-                    _logger.Warning("[HR API] 回傳的部門資料為空");
+                    _logger.Warning($"[HR API] 無部門資料 (CO_ID={coId})，跳過");
                     return;
                 }
 
-                _logger.Info($"[同步處理] 開始同步 {departments.Count} 筆部門資料到 BPM 和 ERP...");
+                _logger.Info($"[同步處理] 取得 {departments.Count} 筆部門資料 (CO_ID={coId})");
 
-                // 同步到 BPM
-                _logger.Info("[同步處理] 正在同步到 BPM...");
-                var bpmResult = await _bpmDatabaseService.SyncDepartmentsAsync(departments);
-                report.BpmDepartmentResult = bpmResult;
+                // 同步到 BPM OrganizationUnit
+                _logger.Info("[同步處理] 正在同步到 BPM (OrganizationUnit)...");
+                var bpmResult = await _bpmDatabaseService.SyncOrganizationUnitsAsync(departments, coId, coCode);
+                report.SetBpmDepartmentResult(coId, bpmResult);
 
-                // 同步到 ERP
-                _logger.Info("[同步處理] 正在同步到 ERP...");
-                var erpResult = await _erpDatabaseService.SyncDepartmentsAsync(departments);
-                report.ErpDepartmentResult = erpResult;
+                // 同步到 ERP gem_file
+                _logger.Info("[同步處理] 正在同步到 ERP (gem_file)...");
+                var erpResult = await _erpDatabaseService.SyncGemFileAsync(departments);
+                report.SetErpDepartmentResult(coId, erpResult);
 
-                // 總結
-                _logger.Info($"[同步完成] 部門資料同步完成 - BPM: {bpmResult.SuccessCount}/{bpmResult.TotalCount}, ERP: {erpResult.SuccessCount}/{erpResult.TotalCount}");
+                _logger.Info($"[同步完成] 部門資料同步完成 (CO_ID={coId}) - " +
+                    $"BPM: {bpmResult.SuccessCount}/{bpmResult.TotalCount}, " +
+                    $"ERP: {erpResult.SuccessCount}/{erpResult.TotalCount}");
             }
             catch (Exception ex)
             {
-                _logger.Error("[同步錯誤] 同步部門資料時發生錯誤", ex);
+                _logger.Error($"[同步錯誤] 同步部門資料時發生錯誤 (CO_ID={coId})", ex);
                 throw;
             }
         }
 
         /// <summary>
-        /// 同步部門層級資料
+        /// 2.2 同步部門層級資料（寫入 BPM OrganizationUnitLevel + ERP abd_file）
         /// </summary>
-        private async Task SyncDeptHierarchyAsync(SyncReport report)
+        private async Task SyncDeptHierarchyAsync(long coId, SyncReport report)
         {
-            _logger.Info("[同步開始] DeptHierarchy 資料 (全量同步)");
+            _logger.Info($"[同步開始] DeptHierarchy 資料 (CO_ID={coId})");
 
             try
             {
                 // 從 HR API 取得部門層級資料
-                var hierarchy = await _hrApiService.GetDeptHierarchyAsync();
+                var hierarchy = await _hrApiService.GetDeptHierarchyAsync(coId);
 
                 if (hierarchy.Count == 0)
                 {
-                    _logger.Warning("[HR API] 回傳的部門層級資料為空");
+                    _logger.Warning($"[HR API] 無部門層級資料 (CO_ID={coId})，跳過");
                     return;
                 }
 
-                _logger.Info($"[同步處理] 開始同步 {hierarchy.Count} 筆部門層級資料到 BPM 和 ERP...");
+                _logger.Info($"[同步處理] 取得 {hierarchy.Count} 筆部門層級資料 (CO_ID={coId})");
 
-                // 同步到 BPM
-                _logger.Info("[同步處理] 正在同步到 BPM...");
-                var bpmResult = await _bpmDatabaseService.SyncDeptHierarchyAsync(hierarchy);
-                report.BpmHierarchyResult = bpmResult;
+                // 同步到 BPM OrganizationUnitLevel
+                _logger.Info("[同步處理] 正在同步到 BPM (OrganizationUnitLevel)...");
+                var bpmResult = await _bpmDatabaseService.SyncOrganizationUnitLevelsAsync(hierarchy, coId);
+                report.SetBpmHierarchyResult(coId, bpmResult);
 
-                // 同步到 ERP
-                _logger.Info("[同步處理] 正在同步到 ERP...");
-                var erpResult = await _erpDatabaseService.SyncDeptHierarchyAsync(hierarchy);
-                report.ErpHierarchyResult = erpResult;
+                // 同步到 ERP abd_file
+                _logger.Info("[同步處理] 正在同步到 ERP (abd_file)...");
+                var erpResult = await _erpDatabaseService.SyncAbdFileAsync(hierarchy);
+                report.SetErpHierarchyResult(coId, erpResult);
 
-                // 總結
-                _logger.Info($"[同步完成] 部門層級同步完成 - BPM: {bpmResult.SuccessCount}/{bpmResult.TotalCount}, ERP: {erpResult.SuccessCount}/{erpResult.TotalCount}");
+                _logger.Info($"[同步完成] 部門層級同步完成 (CO_ID={coId}) - " +
+                    $"BPM: {bpmResult.SuccessCount}/{bpmResult.TotalCount}, " +
+                    $"ERP: {erpResult.SuccessCount}/{erpResult.TotalCount}");
             }
             catch (Exception ex)
             {
-                _logger.Error("[同步錯誤] 同步部門層級資料時發生錯誤", ex);
+                _logger.Error($"[同步錯誤] 同步部門層級資料時發生錯誤 (CO_ID={coId})", ex);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// 2.3 同步員工資料（寫入 BPM Users + Employee + ERP gen_file）
+        /// </summary>
+        private async Task SyncEmployeesAsync(DateTime startTime, DateTime endTime, long coId, SyncReport report)
+        {
+            _logger.LogSyncStart($"Employee (CO_ID={coId})", startTime, endTime);
+
+            try
+            {
+                // 從 HR API 取得員工資料
+                var employees = await _hrApiService.GetEmployeesAsync(startTime, endTime, coId);
+
+                if (employees.Count == 0)
+                {
+                    _logger.Warning($"[HR API] 無員工資料 (CO_ID={coId})，跳過");
+                    return;
+                }
+
+                _logger.Info($"[同步處理] 取得 {employees.Count} 筆員工資料 (CO_ID={coId})");
+
+                // 同步到 BPM (Users + Employee)
+                _logger.Info("[同步處理] 正在同步到 BPM (Users + Employee)...");
+                var bpmResult = await _bpmDatabaseService.SyncEmployeesAsync(employees, coId);
+                report.SetBpmEmployeeResult(coId, bpmResult);
+
+                // 同步到 ERP gen_file
+                _logger.Info("[同步處理] 正在同步到 ERP (gen_file)...");
+                var erpResult = await _erpDatabaseService.SyncGenFileAsync(employees);
+                report.SetErpEmployeeResult(coId, erpResult);
+
+                _logger.Info($"[同步完成] 員工資料同步完成 (CO_ID={coId}) - " +
+                    $"BPM: {bpmResult.SuccessCount}/{bpmResult.TotalCount}, " +
+                    $"ERP: {erpResult.SuccessCount}/{erpResult.TotalCount}");
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"[同步錯誤] 同步員工資料時發生錯誤 (CO_ID={coId})", ex);
                 throw;
             }
         }
     }
 
     /// <summary>
-    /// 同步報告
+    /// 同步報告（支援多公司）
     /// </summary>
     public class SyncReport
     {
@@ -243,13 +278,23 @@ namespace Sync104ToBpmErp.Services
         public bool Success { get; set; }
         public string? ErrorMessage { get; set; }
 
-        public SyncResult? BpmEmployeeResult { get; set; }
-        public SyncResult? BpmDepartmentResult { get; set; }
-        public SyncResult? BpmHierarchyResult { get; set; }
+        // BPM 各表結果（以公司為 key）
+        public SyncResult? BpmOrganizationResult { get; set; }
+        public Dictionary<long, SyncResult> BpmDepartmentResults { get; set; } = new();
+        public Dictionary<long, SyncResult> BpmHierarchyResults { get; set; } = new();
+        public Dictionary<long, SyncResult> BpmEmployeeResults { get; set; } = new();
 
-        public SyncResult? ErpEmployeeResult { get; set; }
-        public SyncResult? ErpDepartmentResult { get; set; }
-        public SyncResult? ErpHierarchyResult { get; set; }
+        // ERP 各表結果（以公司為 key）
+        public Dictionary<long, SyncResult> ErpDepartmentResults { get; set; } = new();
+        public Dictionary<long, SyncResult> ErpHierarchyResults { get; set; } = new();
+        public Dictionary<long, SyncResult> ErpEmployeeResults { get; set; } = new();
+
+        public void SetBpmDepartmentResult(long coId, SyncResult r) => BpmDepartmentResults[coId] = r;
+        public void SetBpmHierarchyResult(long coId, SyncResult r) => BpmHierarchyResults[coId] = r;
+        public void SetBpmEmployeeResult(long coId, SyncResult r) => BpmEmployeeResults[coId] = r;
+        public void SetErpDepartmentResult(long coId, SyncResult r) => ErpDepartmentResults[coId] = r;
+        public void SetErpHierarchyResult(long coId, SyncResult r) => ErpHierarchyResults[coId] = r;
+        public void SetErpEmployeeResult(long coId, SyncResult r) => ErpEmployeeResults[coId] = r;
 
         /// <summary>
         /// 產生文字報告
@@ -272,32 +317,35 @@ namespace Sync104ToBpmErp.Services
 
             // BPM 結果
             sb.AppendLine("--- BPM (電子簽核) 同步結果 ---");
-            if (BpmEmployeeResult != null)
-                sb.AppendLine($"員工: 總計 {BpmEmployeeResult.TotalCount}, 成功 {BpmEmployeeResult.SuccessCount}, 失敗 {BpmEmployeeResult.FailedCount}");
-            if (BpmDepartmentResult != null)
-                sb.AppendLine($"部門: 總計 {BpmDepartmentResult.TotalCount}, 成功 {BpmDepartmentResult.SuccessCount}, 失敗 {BpmDepartmentResult.FailedCount}");
-            if (BpmHierarchyResult != null)
-                sb.AppendLine($"層級: 總計 {BpmHierarchyResult.TotalCount}, 成功 {BpmHierarchyResult.SuccessCount}, 失敗 {BpmHierarchyResult.FailedCount}");
+            if (BpmOrganizationResult != null)
+                sb.AppendLine($"  公司(Organization): {BpmOrganizationResult.SuccessCount}/{BpmOrganizationResult.TotalCount}");
+            foreach (var kv in BpmDepartmentResults)
+                sb.AppendLine($"  部門(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
+            foreach (var kv in BpmHierarchyResults)
+                sb.AppendLine($"  層級(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
+            foreach (var kv in BpmEmployeeResults)
+                sb.AppendLine($"  員工(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
             sb.AppendLine();
 
             // ERP 結果
             sb.AppendLine("--- ERP 同步結果 ---");
-            if (ErpEmployeeResult != null)
-                sb.AppendLine($"員工: 總計 {ErpEmployeeResult.TotalCount}, 成功 {ErpEmployeeResult.SuccessCount}, 失敗 {ErpEmployeeResult.FailedCount}");
-            if (ErpDepartmentResult != null)
-                sb.AppendLine($"部門: 總計 {ErpDepartmentResult.TotalCount}, 成功 {ErpDepartmentResult.SuccessCount}, 失敗 {ErpDepartmentResult.FailedCount}");
-            if (ErpHierarchyResult != null)
-                sb.AppendLine($"層級: 總計 {ErpHierarchyResult.TotalCount}, 成功 {ErpHierarchyResult.SuccessCount}, 失敗 {ErpHierarchyResult.FailedCount}");
+            foreach (var kv in ErpDepartmentResults)
+                sb.AppendLine($"  部門 gem_file(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
+            foreach (var kv in ErpHierarchyResults)
+                sb.AppendLine($"  層級 abd_file(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
+            foreach (var kv in ErpEmployeeResults)
+                sb.AppendLine($"  員工 gen_file(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
             sb.AppendLine();
 
             // 錯誤詳情
             var allErrors = new List<string>();
-            if (BpmEmployeeResult?.Errors.Count > 0) allErrors.AddRange(BpmEmployeeResult.Errors);
-            if (BpmDepartmentResult?.Errors.Count > 0) allErrors.AddRange(BpmDepartmentResult.Errors);
-            if (BpmHierarchyResult?.Errors.Count > 0) allErrors.AddRange(BpmHierarchyResult.Errors);
-            if (ErpEmployeeResult?.Errors.Count > 0) allErrors.AddRange(ErpEmployeeResult.Errors);
-            if (ErpDepartmentResult?.Errors.Count > 0) allErrors.AddRange(ErpDepartmentResult.Errors);
-            if (ErpHierarchyResult?.Errors.Count > 0) allErrors.AddRange(ErpHierarchyResult.Errors);
+            if (BpmOrganizationResult?.Errors.Count > 0) allErrors.AddRange(BpmOrganizationResult.Errors);
+            foreach (var kv in BpmDepartmentResults) allErrors.AddRange(kv.Value.Errors);
+            foreach (var kv in BpmHierarchyResults) allErrors.AddRange(kv.Value.Errors);
+            foreach (var kv in BpmEmployeeResults) allErrors.AddRange(kv.Value.Errors);
+            foreach (var kv in ErpDepartmentResults) allErrors.AddRange(kv.Value.Errors);
+            foreach (var kv in ErpHierarchyResults) allErrors.AddRange(kv.Value.Errors);
+            foreach (var kv in ErpEmployeeResults) allErrors.AddRange(kv.Value.Errors);
 
             if (allErrors.Count > 0)
             {

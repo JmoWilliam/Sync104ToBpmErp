@@ -8,6 +8,10 @@ namespace Sync104ToBpmErp.Services
 {
     /// <summary>
     /// ERP (Oracle) 資料庫服務
+    /// 主要 Table:
+    ///   - gem_file : 部門資料
+    ///   - abd_file : 部門層級資料
+    ///   - gen_file : 員工資料
     /// </summary>
     public class ErpDatabaseService : IDatabaseService
     {
@@ -22,22 +26,10 @@ namespace Sync104ToBpmErp.Services
             _batchSize = batchSize;
         }
 
-        /// <summary>
-        /// 取得資料庫名稱
-        /// </summary>
         public string GetDatabaseName() => "ERP (Oracle)";
 
-        /// <summary>
-        /// 建立資料庫連線 (關閉 TNS 名稱解析，避免 ORA-12154)
-        /// </summary>
-        private IDbConnection CreateConnection()
-        {
-            return new OracleConnection(_connectionString);
-        }
+        private IDbConnection CreateConnection() => new OracleConnection(_connectionString);
 
-        /// <summary>
-        /// 測試資料庫連線
-        /// </summary>
         public async Task<bool> TestConnectionAsync()
         {
             try
@@ -54,137 +46,15 @@ namespace Sync104ToBpmErp.Services
             }
         }
 
-        /// <summary>
-        /// 同步員工資料
-        /// </summary>
-        public async Task<SyncResult> SyncEmployeesAsync(List<Employee> employees)
-        {
-            var result = new SyncResult { DataType = "Employee", TargetSystem = "ERP" };
+        #region gem_file（部門）
 
-            if (employees == null || employees.Count == 0)
-            {
-                _logger.Warning($"[{GetDatabaseName()}] 沒有員工資料需要同步");
-                return result;
-            }
+        public async Task<SyncResult> SyncGemFileAsync(List<Department> departments)
+        {
+            var result = new SyncResult { DataType = "gem_file", TargetSystem = "ERP" };
+            if (departments == null || departments.Count == 0) return result;
 
             using var connection = CreateConnection();
             connection.Open();
-
-            using var transaction = connection.BeginTransaction();
-
-            try
-            {
-                result.TotalCount = employees.Count;
-                int processedCount = 0;
-
-                foreach (var emp in employees)
-                {
-                    processedCount++;
-                    int existingCount = 0;
-                    try
-                    {
-                        // 檢查員工是否已存在
-                        existingCount = await connection.ExecuteScalarAsync<int>(
-                            "SELECT COUNT(1) FROM ERP_EMPLOYEE WHERE EMP_NO = :EmpNo",
-                            new { EmpNo = emp.EmpNo },
-                            transaction);
-
-                        if (existingCount > 0)
-                        {
-                            // 更新現有員工
-                            await connection.ExecuteAsync(@"
-                                UPDATE ERP_EMPLOYEE SET
-                                    EMP_NAME = :EmpName,
-                                    EMP_NAME_EN = :EmpNameEn,
-                                    DEPT_CODE = :DeptCode,
-                                    DEPT_NAME = :DeptName,
-                                    POSITION = :Position,
-                                    EMAIL = :Email,
-                                    PHONE = :Phone,
-                                    STATUS = :Status,
-                                    JOIN_DATE = :JoinDate,
-                                    LEAVE_DATE = :LeaveDate,
-                                    MANAGER_EMP_NO = :ManagerEmpNo,
-                                    LAST_MODIFIED = :LastModified,
-                                    SYNC_TIME = SYSDATE
-                                WHERE EMP_NO = :EmpNo",
-                                emp, transaction);
-
-                            _logger.LogSyncDetail("Employee", "UPDATE", emp.EmpNo, true);
-                        }
-                        else
-                        {
-                            // 新增員工
-                            await connection.ExecuteAsync(@"
-                                INSERT INTO ERP_EMPLOYEE (
-                                    EMP_NO, EMP_NAME, EMP_NAME_EN, DEPT_CODE, DEPT_NAME,
-                                    POSITION, EMAIL, PHONE, STATUS, JOIN_DATE, LEAVE_DATE,
-                                    MANAGER_EMP_NO, LAST_MODIFIED, SYNC_TIME
-                                ) VALUES (
-                                    :EmpNo, :EmpName, :EmpNameEn, :DeptCode, :DeptName,
-                                    :Position, :Email, :Phone, :Status, :JoinDate, :LeaveDate,
-                                    :ManagerEmpNo, :LastModified, SYSDATE
-                                )",
-                                emp, transaction);
-
-                            _logger.LogSyncDetail("Employee", "INSERT", emp.EmpNo, true);
-                        }
-
-                        result.SuccessCount++;
-
-                        // 每 100 筆記錄一次進度
-                        if (processedCount % 100 == 0)
-                        {
-                            _logger.Info($"[{GetDatabaseName()}] 員工資料同步進度: {processedCount}/{employees.Count}");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        result.FailedCount++;
-                        var action = existingCount > 0 ? "UPDATE" : "INSERT";
-                        var errorMsg = $"員工 {emp.EmpNo} ({emp.EmpName}): {ex.Message}";
-                        result.Errors.Add(errorMsg);
-                        _logger.LogSyncDetail("Employee", action, emp.EmpNo, false, ex.Message);
-                    }
-                }
-
-                transaction.Commit();
-                result.Success = true;
-
-                _logger.LogSyncEnd($"Employee ({GetDatabaseName()})", result.TotalCount, result.SuccessCount, result.FailedCount);
-
-                if (result.FailedCount > 0)
-                {
-                    _logger.Warning($"[{GetDatabaseName()}] 員工同步完成，但有 {result.FailedCount} 筆失敗");
-                }
-            }
-            catch (Exception ex)
-            {
-                transaction.Rollback();
-                result.Success = false;
-                _logger.Error($"[{GetDatabaseName()}] 同步員工資料時發生嚴重錯誤，已回滾交易", ex);
-                throw;
-            }
-
-            return result;
-        }
-
-        /// <summary>
-        /// 同步部門資料
-        /// </summary>
-        public async Task<SyncResult> SyncDepartmentsAsync(List<Department> departments)
-        {
-            var result = new SyncResult { DataType = "Department", TargetSystem = "ERP" };
-
-            if (departments == null || departments.Count == 0)
-            {
-                _logger.Warning($"[{GetDatabaseName()}] 沒有部門資料需要同步");
-                return result;
-            }
-
-            using var connection = CreateConnection();
-            connection.Open();
-
             using var transaction = connection.BeginTransaction();
 
             try
@@ -195,114 +65,104 @@ namespace Sync104ToBpmErp.Services
                 foreach (var dept in departments)
                 {
                     processedCount++;
-                    int existingCount = 0;
                     try
                     {
-                        // 檢查部門是否已存在
-                        existingCount = await connection.ExecuteScalarAsync<int>(
-                            "SELECT COUNT(1) FROM ERP_DEPARTMENT WHERE DEPT_CODE = :DeptCode",
-                            new { DeptCode = dept.DeptCode },
-                            transaction);
+                        // UPSERT: 以 GEM01 = DEPT_CODE 判斷存在/不存在
+                        var exists = await connection.ExecuteScalarAsync<int>(
+                            "SELECT COUNT(1) FROM YCS.GEM_FILE WHERE GEM01 = :GEM01",
+                            new { GEM01 = dept.DeptCode },
+                            transaction) > 0;
 
-                        if (existingCount > 0)
+                        if (exists)
                         {
-                            // 更新現有部門
+                            // Update
                             await connection.ExecuteAsync(@"
-                                UPDATE ERP_DEPARTMENT SET
-                                    DEPT_NAME = :DeptName,
-                                    DEPT_NAME_EN = :DeptNameEn,
-                                    PARENT_DEPT_CODE = :ParentDeptCode,
-                                    DEPT_LEVEL = :DeptLevel,
-                                    MANAGER_EMP_NO = :ManagerEmpNo,
-                                    STATUS = :Status,
-                                    LAST_MODIFIED = :LastModified,
-                                    SYNC_TIME = SYSDATE
-                                WHERE DEPT_CODE = :DeptCode",
-                                dept, transaction);
+                                UPDATE YCS.GEM_FILE SET
+                                    GEM02 = :GEM02,
+                                    GEM03 = :GEM03,
+                                    GEMACTI = :GEMACTI,
+                                    GEMMODU = 'tiptop',
+                                    GEMDATE = SYSDATE
+                                WHERE GEM01 = :GEM01",
+                                new
+                                {
+                                    GEM01 = dept.DeptCode,
+                                    GEM02 = dept.DeptName ?? "",
+                                    GEM03 = dept.DeptName ?? "",
+                                    GEMACTI = dept.IsAct == 1 ? "Y" : "N"
+                                },
+                                transaction);
 
-                            _logger.LogSyncDetail("Department", "UPDATE", dept.DeptCode, true);
+                            _logger.LogSyncDetail("gem_file", "UPDATE", dept.DeptCode, true);
                         }
                         else
                         {
-                            // 新增部門
+                            // Insert
                             await connection.ExecuteAsync(@"
-                                INSERT INTO ERP_DEPARTMENT (
-                                    DEPT_CODE, DEPT_NAME, DEPT_NAME_EN, PARENT_DEPT_CODE,
-                                    DEPT_LEVEL, MANAGER_EMP_NO, STATUS, LAST_MODIFIED, SYNC_TIME
+                                INSERT INTO YCS.GEM_FILE (
+                                    GEM01, GEM02, GEM03, GEM04, GEM05, GEM06, GEM07, GEM08,
+                                    GEMACTI, GEMUSER, GEMGRUP, GEMMODU, GEMDATE, GEM09, GEM10, GEM11,
+                                    GEMORIG, GEMORIU
                                 ) VALUES (
-                                    :DeptCode, :DeptName, :DeptNameEn, :ParentDeptCode,
-                                    :DeptLevel, :ManagerEmpNo, :Status, :LastModified, SYSDATE
+                                    :GEM01, :GEM02, :GEM03, NULL, 'N', NULL, NULL, NULL,
+                                    :GEMACTI, 'tiptop', 'tiptop', 'tiptop', SYSDATE, '1', NULL, NULL,
+                                    'tiptop', 'tiptop'
                                 )",
-                                dept, transaction);
+                                new
+                                {
+                                    GEM01 = dept.DeptCode,
+                                    GEM02 = dept.DeptName ?? "",
+                                    GEM03 = dept.DeptName ?? "",
+                                    GEMACTI = dept.IsAct == 1 ? "Y" : "N"
+                                },
+                                transaction);
 
-                            _logger.LogSyncDetail("Department", "INSERT", dept.DeptCode, true);
+                            _logger.LogSyncDetail("gem_file", "INSERT", dept.DeptCode, true);
                         }
 
                         result.SuccessCount++;
 
-                        // 每 100 筆記錄一次進度
                         if (processedCount % 100 == 0)
-                        {
-                            _logger.Info($"[{GetDatabaseName()}] 部門資料同步進度: {processedCount}/{departments.Count}");
-                        }
+                            _logger.Info($"[{GetDatabaseName()}] 部門同步進度: {processedCount}/{departments.Count}");
                     }
                     catch (Exception ex)
                     {
                         result.FailedCount++;
-                        var action = existingCount > 0 ? "UPDATE" : "INSERT";
-                        var errorMsg = $"部門 {dept.DeptCode} ({dept.DeptName}): {ex.Message}";
-                        result.Errors.Add(errorMsg);
-                        _logger.LogSyncDetail("Department", action, dept.DeptCode, false, ex.Message);
+                        result.Errors.Add($"部門 {dept.DeptCode}: {ex.Message}");
+                        _logger.LogSyncDetail("gem_file", "SYNC", dept.DeptCode, false, ex.Message);
                     }
                 }
 
                 transaction.Commit();
                 result.Success = true;
-
-                _logger.LogSyncEnd($"Department ({GetDatabaseName()})", result.TotalCount, result.SuccessCount, result.FailedCount);
-
-                if (result.FailedCount > 0)
-                {
-                    _logger.Warning($"[{GetDatabaseName()}] 部門同步完成，但有 {result.FailedCount} 筆失敗");
-                }
+                _logger.LogSyncEnd($"gem_file ({GetDatabaseName()})", result.TotalCount, result.SuccessCount, result.FailedCount);
             }
             catch (Exception ex)
             {
                 transaction.Rollback();
                 result.Success = false;
-                _logger.Error($"[{GetDatabaseName()}] 同步部門資料時發生嚴重錯誤，已回滾交易", ex);
+                _logger.Error($"[{GetDatabaseName()}] 同步 gem_file 資料時發生錯誤，已回滾", ex);
                 throw;
             }
 
             return result;
         }
 
-        /// <summary>
-        /// 同步部門層級資料
-        /// </summary>
-        public async Task<SyncResult> SyncDeptHierarchyAsync(List<DeptHierarchy> hierarchy)
-        {
-            var result = new SyncResult { DataType = "DeptHierarchy", TargetSystem = "ERP" };
+        #endregion
 
-            if (hierarchy == null || hierarchy.Count == 0)
-            {
-                _logger.Warning($"[{GetDatabaseName()}] 沒有部門層級資料需要同步");
-                return result;
-            }
+        #region abd_file（部門層級）
+
+        public async Task<SyncResult> SyncAbdFileAsync(List<DeptHierarchy> hierarchy)
+        {
+            var result = new SyncResult { DataType = "abd_file", TargetSystem = "ERP" };
+            if (hierarchy == null || hierarchy.Count == 0) return result;
 
             using var connection = CreateConnection();
             connection.Open();
-
             using var transaction = connection.BeginTransaction();
 
             try
             {
-                // 先清空舊的層級資料
-                _logger.Info($"[{GetDatabaseName()}] 正在清空舊的部門層級資料...");
-                await connection.ExecuteAsync(
-                    "DELETE FROM ERP_DEPT_HIERARCHY",
-                    transaction: transaction);
-
                 result.TotalCount = hierarchy.Count;
                 int processedCount = 0;
 
@@ -311,51 +171,225 @@ namespace Sync104ToBpmErp.Services
                     processedCount++;
                     try
                     {
-                        await connection.ExecuteAsync(@"
-                            INSERT INTO ERP_DEPT_HIERARCHY (
-                                DEPT_CODE, PARENT_DEPT_CODE, LEVEL, PATH, SYNC_TIME
-                            ) VALUES (
-                                :DeptCode, :ParentDeptCode, :Level, :Path, SYSDATE
-                            )",
-                            item, transaction);
+                        var abd01 = ((int)(item.SortOrder ?? 0)).ToString();
+                        var levelName = item.LevelName ?? "";
+                        var abd02 = levelName.Length > 10 ? levelName[..10] : levelName;
+
+                        // UPSERT: 以 ABD01 + ABD02 複合 PK 判斷
+                        var exists = await connection.ExecuteScalarAsync<int>(
+                            "SELECT COUNT(1) FROM YCS.ABD_FILE WHERE ABD01 = :ABD01 AND ABD02 = :ABD02",
+                            new { ABD01 = abd01, ABD02 = abd02 },
+                            transaction) > 0;
+
+                        if (exists)
+                        {
+                            // Update
+                            await connection.ExecuteAsync(@"
+                                UPDATE YCS.ABD_FILE SET
+                                    ABDACTI = :ABDACTI,
+                                    ABDMODU = 'tiptop',
+                                    ABDDATE = SYSDATE
+                                WHERE ABD01 = :ABD01 AND ABD02 = :ABD02",
+                                new
+                                {
+                                    ABD01 = abd01,
+                                    ABD02 = abd02,
+                                    ABDACTI = item.IsAct == 1 ? "Y" : "N"
+                                },
+                                transaction);
+
+                            _logger.LogSyncDetail("abd_file", "UPDATE", $"{abd01}-{abd02}", true);
+                        }
+                        else
+                        {
+                            // Insert
+                            await connection.ExecuteAsync(@"
+                                INSERT INTO YCS.ABD_FILE (
+                                    ABD01, ABD02, ABD03, ABD04, ABD05, ABD06,
+                                    ABDACTI, ABDUSER, ABDGRUP, ABDMODU, ABDDATE,
+                                    ABDORIG, ABDORIU
+                                ) VALUES (
+                                    :ABD01, :ABD02, NULL, NULL, NULL, NULL,
+                                    :ABDACTI, 'tiptop', 'tiptop', 'tiptop', SYSDATE,
+                                    'tiptop', 'tiptop'
+                                )",
+                                new
+                                {
+                                    ABD01 = abd01,
+                                    ABD02 = abd02,
+                                    ABDACTI = item.IsAct == 1 ? "Y" : "N"
+                                },
+                                transaction);
+
+                            _logger.LogSyncDetail("abd_file", "INSERT", $"{abd01}-{abd02}", true);
+                        }
 
                         result.SuccessCount++;
-                        _logger.LogSyncDetail("DeptHierarchy", "INSERT", $"{item.DeptCode}->{item.ParentDeptCode}", true);
 
-                        // 每 100 筆記錄一次進度
                         if (processedCount % 100 == 0)
-                        {
-                            _logger.Info($"[{GetDatabaseName()}] 部門層級同步進度: {processedCount}/{hierarchy.Count}");
-                        }
+                            _logger.Info($"[{GetDatabaseName()}] 層級同步進度: {processedCount}/{hierarchy.Count}");
                     }
                     catch (Exception ex)
                     {
                         result.FailedCount++;
-                        var errorMsg = $"部門層級 {item.DeptCode} -> {item.ParentDeptCode}: {ex.Message}";
-                        result.Errors.Add(errorMsg);
-                        _logger.LogSyncDetail("DeptHierarchy", "INSERT", $"{item.DeptCode}->{item.ParentDeptCode}", false, ex.Message);
+                        result.Errors.Add($"層級 {item.LevelName}: {ex.Message}");
+                        _logger.LogSyncDetail("abd_file", "SYNC", item.LevelName ?? "(null)", false, ex.Message);
                     }
                 }
 
                 transaction.Commit();
                 result.Success = true;
-
-                _logger.LogSyncEnd($"DeptHierarchy ({GetDatabaseName()})", result.TotalCount, result.SuccessCount, result.FailedCount);
-
-                if (result.FailedCount > 0)
-                {
-                    _logger.Warning($"[{GetDatabaseName()}] 部門層級同步完成，但有 {result.FailedCount} 筆失敗");
-                }
+                _logger.LogSyncEnd($"abd_file ({GetDatabaseName()})", result.TotalCount, result.SuccessCount, result.FailedCount);
             }
             catch (Exception ex)
             {
                 transaction.Rollback();
                 result.Success = false;
-                _logger.Error($"[{GetDatabaseName()}] 同步部門層級資料時發生嚴重錯誤，已回滾交易", ex);
+                _logger.Error($"[{GetDatabaseName()}] 同步 abd_file 資料時發生錯誤，已回滾", ex);
                 throw;
             }
 
             return result;
         }
+
+        #endregion
+
+        #region gen_file（員工）
+
+        public async Task<SyncResult> SyncGenFileAsync(List<Employee> employees)
+        {
+            var result = new SyncResult { DataType = "gen_file", TargetSystem = "ERP" };
+            if (employees == null || employees.Count == 0) return result;
+
+            using var connection = CreateConnection();
+            connection.Open();
+            using var transaction = connection.BeginTransaction();
+
+            try
+            {
+                result.TotalCount = employees.Count;
+                int processedCount = 0;
+
+                foreach (var emp in employees)
+                {
+                    processedCount++;
+                    try
+                    {
+                        // UPSERT: 以 GEN01 = EMP_NO 判斷
+                        var exists = await connection.ExecuteScalarAsync<int>(
+                            "SELECT COUNT(1) FROM YCS.GEN_FILE WHERE GEN01 = :GEN01",
+                            new { GEN01 = emp.EmpNo },
+                            transaction) > 0;
+
+                        // GENDATE = 到職日 JOIN_DATE（若有）或 SYSDATE
+                        var genDate = emp.JoinDate ?? DateTime.Now;
+
+                        if (exists)
+                        {
+                            // Update
+                            await connection.ExecuteAsync(@"
+                                UPDATE YCS.GEN_FILE SET
+                                    GEN02 = :GEN02,
+                                    GEN03 = :GEN03,
+                                    GEN04 = :GEN04,
+                                    GEN06 = :GEN06,
+                                    GENMODU = 'tiptop',
+                                    GENDATE = :GENDATE
+                                WHERE GEN01 = :GEN01",
+                                new
+                                {
+                                    GEN01 = emp.EmpNo,
+                                    GEN02 = emp.EmpName ?? "",
+                                    GEN03 = emp.DeptCode ?? "",
+                                    GEN04 = emp.Position ?? "",
+                                    GEN06 = emp.Email ?? "",
+                                    GENDATE = genDate
+                                },
+                                transaction);
+
+                            _logger.LogSyncDetail("gen_file", "UPDATE", emp.EmpNo, true);
+                        }
+                        else
+                        {
+                            // Insert
+                            await connection.ExecuteAsync(@"
+                                INSERT INTO YCS.GEN_FILE (
+                                    GEN01, GEN02, GEN03, GEN04, GEN05, GEN06,
+                                    GENACTI, GENUSER, GENGRUP, GENMODU, GENDATE,
+                                    TA_GEN07, TA_GEN08
+                                ) VALUES (
+                                    :GEN01, :GEN02, :GEN03, :GEN04, NULL, :GEN06,
+                                    'N', 'tiptop', 'tiptop', 'tiptop', :GENDATE,
+                                    NULL, NULL
+                                )",
+                                new
+                                {
+                                    GEN01 = emp.EmpNo,
+                                    GEN02 = emp.EmpName ?? "",
+                                    GEN03 = emp.DeptCode ?? "",
+                                    GEN04 = emp.Position ?? "",
+                                    GEN06 = emp.Email ?? "",
+                                    GENDATE = genDate
+                                },
+                                transaction);
+
+                            _logger.LogSyncDetail("gen_file", "INSERT", emp.EmpNo, true);
+                        }
+
+                        result.SuccessCount++;
+
+                        if (processedCount % 100 == 0)
+                            _logger.Info($"[{GetDatabaseName()}] 員工同步進度: {processedCount}/{employees.Count}");
+                    }
+                    catch (Exception ex)
+                    {
+                        result.FailedCount++;
+                        result.Errors.Add($"員工 {emp.EmpNo}: {ex.Message}");
+                        _logger.LogSyncDetail("gen_file", "SYNC", emp.EmpNo, false, ex.Message);
+                    }
+                }
+
+                transaction.Commit();
+                result.Success = true;
+                _logger.LogSyncEnd($"gen_file ({GetDatabaseName()})", result.TotalCount, result.SuccessCount, result.FailedCount);
+            }
+            catch (Exception ex)
+            {
+                transaction.Rollback();
+                result.Success = false;
+                _logger.Error($"[{GetDatabaseName()}] 同步 gen_file 資料時發生錯誤，已回滾", ex);
+                throw;
+            }
+
+            return result;
+        }
+
+        #endregion
+
+        #region 保留的舊介面 + BPM 方法存根（此 Service 實際僅處理 ERP 表）
+
+        public Task<SyncResult> SyncEmployeesAsync(List<Employee> employees)
+            => throw new NotSupportedException("請改用 SyncGenFileAsync(List<Employee>)");
+
+        public Task<SyncResult> SyncDepartmentsAsync(List<Department> departments)
+            => throw new NotSupportedException("請改用 SyncGemFileAsync(List<Department>)");
+
+        public Task<SyncResult> SyncDeptHierarchyAsync(List<DeptHierarchy> hierarchy)
+            => throw new NotSupportedException("請改用 SyncAbdFileAsync(List<DeptHierarchy>)");
+
+        // BPM 方法：ERP Service 不實作，回傳空結果
+        public Task<SyncResult> SyncOrganizationAsync(List<CompanyInfo> companies)
+            => Task.FromResult(new SyncResult { DataType = "Organization", TargetSystem = "ERP(跳過)" });
+
+        public Task<SyncResult> SyncOrganizationUnitsAsync(List<Department> departments, long coId, string coCode)
+            => Task.FromResult(new SyncResult { DataType = "OrganizationUnit", TargetSystem = "ERP(跳過)" });
+
+        public Task<SyncResult> SyncOrganizationUnitLevelsAsync(List<DeptHierarchy> hierarchy, long coId)
+            => Task.FromResult(new SyncResult { DataType = "OrganizationUnitLevel", TargetSystem = "ERP(跳過)" });
+
+        public Task<SyncResult> SyncEmployeesAsync(List<Employee> employees, long coId)
+            => throw new NotSupportedException("請改用 SyncGenFileAsync(List<Employee>)");
+
+        #endregion
     }
 }

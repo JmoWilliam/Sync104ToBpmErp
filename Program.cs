@@ -281,7 +281,10 @@ namespace Sync104ToBpmErp
         }
 
         /// <summary>
-        /// 執行同步
+        /// 執行同步（新流程）
+        /// 1. 呼叫 /api/os/company 取得所有公司
+        /// 2. 依公司 loop 同步部門層級 → 部門 → 員工
+        /// 3. 每筆資料以 UPSERT 方式寫入 BPM + ERP
         /// </summary>
         static async Task ExecuteSyncAsync(AppSettings settings, ILoggerService logger, DateTime startTime, DateTime endTime)
         {

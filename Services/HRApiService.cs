@@ -148,23 +148,19 @@ namespace Sync104ToBpmErp.Services
         }
 
         /// <summary>
-        /// 取得所屬 CO_ID（優先使用傳入參數，否則回退設定值）
-        /// </summary>
-        private long ResolveCompanyId(long? companyId)
-        {
-            return companyId ?? _settings.CompanyId;
-        }
-
-        /// <summary>
         /// 取得所有員工資料 (依時間範圍)
+        /// 注意：companyId 不再有 fallback，必須由呼叫端提供（從 /api/os/company 取得）
         /// </summary>
         public async Task<List<Employee>> GetEmployeesAsync(DateTime startTime, DateTime endTime, long? companyId = null)
         {
+            if (companyId == null)
+                throw new ArgumentNullException(nameof(companyId), "companyId 不得為 null，請先從 /api/os/company 取得 CO_ID");
+
             try
             {
                 await SetAuthorizationHeaderAsync();
 
-                var coId = ResolveCompanyId(companyId);
+                var coId = companyId.Value;
 
                 // 格式化時間參數 (yyyy-MM-dd HH:mm:ss 格式)
                 var startTimeStr = startTime.ToString("yyyy-MM-dd HH:mm:ss");
@@ -224,14 +220,18 @@ namespace Sync104ToBpmErp.Services
 
         /// <summary>
         /// 取得所有部門資料 (依時間範圍)
+        /// 注意：companyId 不再有 fallback，必須由呼叫端提供（從 /api/os/company 取得）
         /// </summary>
         public async Task<List<Department>> GetDepartmentsAsync(DateTime startTime, DateTime endTime, long? companyId = null)
         {
+            if (companyId == null)
+                throw new ArgumentNullException(nameof(companyId), "companyId 不得為 null，請先從 /api/os/company 取得 CO_ID");
+
             try
             {
                 await SetAuthorizationHeaderAsync();
 
-                var coId = ResolveCompanyId(companyId);
+                var coId = companyId.Value;
 
                 // 格式化時間參數 (yyyy-MM-dd HH:mm:ss 格式)
                 var startTimeStr = startTime.ToString("yyyy-MM-dd HH:mm:ss");
@@ -294,14 +294,18 @@ namespace Sync104ToBpmErp.Services
 
         /// <summary>
         /// 取得部門層級資料
+        /// 注意：companyId 不再有 fallback，必須由呼叫端提供（從 /api/os/company 取得）
         /// </summary>
         public async Task<List<DeptHierarchy>> GetDeptHierarchyAsync(long? companyId = null)
         {
+            if (companyId == null)
+                throw new ArgumentNullException(nameof(companyId), "companyId 不得為 null，請先從 /api/os/company 取得 CO_ID");
+
             try
             {
                 await SetAuthorizationHeaderAsync();
 
-                var coId = ResolveCompanyId(companyId);
+                var coId = companyId.Value;
 
                 _logger.Info($"[HR API] 正在呼叫部門層級資料 API: {_settings.HierarchyEndpoint} (CO_ID={coId})");
 
