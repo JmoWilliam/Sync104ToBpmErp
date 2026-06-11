@@ -7,6 +7,7 @@ namespace Sync104ToBpmErp.Configuration
     {
         public string BaseUrl { get; set; } = string.Empty;
         public string AuthEndpoint { get; set; } = string.Empty;
+        public string CompanyEndpoint { get; set; } = "/api/os/company";
         public string EmployeeEndpoint { get; set; } = string.Empty;
         public string DepartmentEndpoint { get; set; } = string.Empty;
         public string HierarchyEndpoint { get; set; } = string.Empty;
@@ -16,8 +17,8 @@ namespace Sync104ToBpmErp.Configuration
         public string UserAccount { get; set; } = string.Empty;
         public string UserPassword { get; set; } = string.Empty;
 
-        // 固定公司 ID
-        public long CompanyId { get; set; } = 29;
+        // 預設公司 ID（作為 fallback，可從 /api/os/company 動態取得）
+        public long CompanyId { get; set; }
 
         // 組織類別代碼 (預設 1 = 部門)
         public string OrgTypeCode { get; set; } = "1";

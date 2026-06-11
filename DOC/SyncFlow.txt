@@ -1,0 +1,65 @@
+D:\Project\Sync104ToBpmErp 專案裡執行Program.cs 裡的 TestHRApiAsync 時幫我調整如下
+1.呼叫/api/os/company 取得CO_ID, CO_CODE, 取消 appsetting.json裡的CompanyId
+2.for 1 取到CO_ID loop, 原本CompanyId = CO_ID
+  2.1 取得 appsetting.DepartmentEndpoint api取得部門資料 
+    2.1.1 寫入BPM
+      Table:OrganizationUnit
+       OID:32位數英數字亂碼, 取得後要檢核現有OrganizationUnit.OID是否已存在
+       id: 部門代碼?
+       organizationUnitName: 部門名稱?
+       managerOID: 看來是UserId
+       superUnitOID: 看來是上級部門OID
+       objectVersion: 看來資料版次
+       organizationUnitType: 再確認
+       levelOID: 再確認
+       organizationOID: 應該是公司的OID
+       validType: 再確認
+    2.1.2 寫入ERP
+      Table:gem_file
+      Column:
+		GEM01	VARCHAR2	10	Y		部門編號
+		GEM02	VARCHAR2	80			部門名稱
+		GEM03	VARCHAR2	80			部門全稱
+		GEM04	VARCHAR2	6			No Use
+		GEM05	VARCHAR2	1			是否為會計部門
+		GEM06	VARCHAR2	1			No Use
+		GEM07	VARCHAR2	1			費用類別
+		GEM08	VARCHAR2	1			No Use
+		GEMACTI	VARCHAR2	1			資料有效碼
+		GEMUSER	VARCHAR2	10			資料所有者
+		GEMGRUP	VARCHAR2	10			資料所有部門
+		GEMMODU	VARCHAR2	10			資料修改者
+		GEMDATE	DATE				最近修改日
+		GEM09	VARCHAR2	1			管理類別 1.成本中心 2.利潤中
+		GEM10	VARCHAR2	10			對應成本中心
+		GEM11	VARCHAR2	10			no use
+		GEMORIG	VARCHAR2	10			資料建立部門
+		GEMORIU	VARCHAR2	10			資料建立者
+
+
+  2.2 取得 appsetting.HierarchyEndpoint api取得部門層級資料
+  2.3 取得 appsetting.json裡EmployeeEndpoint api取得員工資料
+    2.3.1 寫入BPM 
+       Table:Employee
+       Column:
+	 	OID: 32位數英數字亂碼, 取得後要檢核現有Employee.OID是否已存在
+		employeeId: 不確定資料來源
+		organizationOID: 應該是部門ID, 比較麻煩, 需要取得API回傳的DEPT_ID再呼叫 104API資料取得部門代碼, 再用部門代碼取得BPM裡部門OID, OrganizationUnit.OID
+		userOID: 不確定資料來源
+		objectVersion:看起來是更新版次, 新增時是否都只存放1
+		validTo: 應該可放空值
+    2.3.2 寫入ERP 
+       Table:gen_file
+       Column:
+        GEN01:
+        GEN02:姓名
+        GEN03:部門?
+        GEN04:職稱
+        GEN05:NULL
+        GEN06:Email
+        GENACT:Default N
+        GENUSER:Default tiptop?
+        GENGRUP:主管部門?
+        CENDATE:建立日期 YYYY/MM/DD
+        TA_GEN07: 不確定資料來源
+        TA_GEN08: 不確定資料來源

@@ -3,7 +3,7 @@
 # Usage: .\package.ps1 [-SelfContained] [-Runtime win-x64]
 # ============================================================
 param(
-    [switch]$SelfContained,
+    [switch]$FrameworkDependent,
     [string]$Runtime = "win-x64",
     [string]$Configuration = "Release"
 )
@@ -42,10 +42,10 @@ Write-Host "  Sync104ToBpmErp Deployment Packager"
 Write-Host "========================================"
 Write-Host ""
 
-if ($SelfContained) {
-    Write-Host "Mode: Self-Contained (includes .NET Runtime)  Platform: $Runtime" -ForegroundColor Magenta
-} else {
+if ($FrameworkDependent) {
     Write-Host "Mode: Framework-Dependent (requires .NET 8 Runtime)" -ForegroundColor Magenta
+} else {
+    Write-Host "Mode: Self-Contained (includes .NET Runtime)  Platform: $Runtime" -ForegroundColor Magenta
 }
 Write-Host ""
 
@@ -87,11 +87,11 @@ $publishArgs = @(
     "-o", $PublishDir
 )
 
-if ($SelfContained) {
+if ($FrameworkDependent) {
+    $publishArgs += "--self-contained", "false"
+} else {
     $publishArgs += "--self-contained", "true"
     $publishArgs += "-r", $Runtime
-} else {
-    $publishArgs += "--self-contained", "false"
 }
 
 Write-Host "  dotnet $($publishArgs -join ' ')"
@@ -183,7 +183,7 @@ Write-Host "  ZIP : $ZipPath" -ForegroundColor Green
 Write-Host "  Dir : $PackagePath" -ForegroundColor Green
 Write-Host "  Size: $zipSizeMB MB" -ForegroundColor Cyan
 Write-Host "  Files: $pkgFileCount" -ForegroundColor Cyan
-Write-Host "  Mode: $(if ($SelfContained) { 'Self-Contained (no runtime needed)' } else { 'Framework-Dependent (needs .NET 8)' })" -ForegroundColor Cyan
+Write-Host "  Mode: $(if (-not $FrameworkDependent) { 'Self-Contained (no runtime needed)' } else { 'Framework-Dependent (needs .NET 8)' })" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
 Write-Host "  1. Copy $ZipPath to client machine"

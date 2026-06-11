@@ -93,13 +93,78 @@ namespace Sync104ToBpmErp.Services
         }
 
         /// <summary>
-        /// 取得所有員工資料 (依時間範圍)
+        /// 取得所有公司資訊 (/api/os/company)
         /// </summary>
-        public async Task<List<Employee>> GetEmployeesAsync(DateTime startTime, DateTime endTime)
+        public async Task<List<CompanyInfo>> GetCompaniesAsync()
         {
             try
             {
                 await SetAuthorizationHeaderAsync();
+
+                _logger.Info($"[HR API] 正在呼叫公司資料 API: {_settings.CompanyEndpoint}");
+
+                var requestBody = new
+                {
+                    ACCESS_TOKEN = _accessToken
+                };
+
+                var content = new StringContent(
+                    JsonSerializer.Serialize(requestBody),
+                    Encoding.UTF8,
+                    "application/json");
+
+                var response = await _httpClient.PostAsync(_settings.CompanyEndpoint, content);
+                response.EnsureSuccessStatusCode();
+
+                var jsonString = await response.Content.ReadAsStringAsync();
+                _logger.Info($"[HR API] 公司 API 回應: {jsonString.Substring(0, Math.Min(200, jsonString.Length))}...");
+
+                // 嘗試解析為包裝回應格式
+                var apiResponse = JsonSerializer.Deserialize<ApiResponse<List<CompanyInfo>>>(jsonString);
+
+                if (apiResponse?.IsSuccess == true && apiResponse.Data != null)
+                {
+                    var count = apiResponse.Data.Count;
+                    _logger.Info($"[HR API] 成功取得 {count} 筆公司資料");
+                    return apiResponse.Data;
+                }
+
+                // 如果包裝格式解析失敗，嘗試直接解析為 List<CompanyInfo>
+                var companies = JsonSerializer.Deserialize<List<CompanyInfo>>(jsonString);
+                if (companies != null)
+                {
+                    _logger.Info($"[HR API] 成功取得 {companies.Count} 筆公司資料 (直接格式)");
+                    return companies;
+                }
+
+                _logger.Warning($"[HR API] 無法解析公司資料回應，Code: {apiResponse?.Code}, Message: {apiResponse?.Message}");
+                return new List<CompanyInfo>();
+            }
+            catch (Exception ex)
+            {
+                _logger.Error("[HR API] 取得公司資料失敗", ex);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// 取得所屬 CO_ID（優先使用傳入參數，否則回退設定值）
+        /// </summary>
+        private long ResolveCompanyId(long? companyId)
+        {
+            return companyId ?? _settings.CompanyId;
+        }
+
+        /// <summary>
+        /// 取得所有員工資料 (依時間範圍)
+        /// </summary>
+        public async Task<List<Employee>> GetEmployeesAsync(DateTime startTime, DateTime endTime, long? companyId = null)
+        {
+            try
+            {
+                await SetAuthorizationHeaderAsync();
+
+                var coId = ResolveCompanyId(companyId);
 
                 // 格式化時間參數 (yyyy-MM-dd HH:mm:ss 格式)
                 var startTimeStr = startTime.ToString("yyyy-MM-dd HH:mm:ss");
@@ -109,7 +174,7 @@ namespace Sync104ToBpmErp.Services
                 var requestBody = new
                 {
                     ACCESS_TOKEN = _accessToken,
-                    CO_ID = _settings.CompanyId,
+                    CO_ID = coId,
                     C_SDATETIME = startTimeStr,
                     C_EDATETIME = endTimeStr
                 };
@@ -119,7 +184,7 @@ namespace Sync104ToBpmErp.Services
                     Encoding.UTF8,
                     "application/json");
 
-                _logger.Info($"[HR API] 正在呼叫員工資料 API: {_settings.EmployeeEndpoint}");
+                _logger.Info($"[HR API] 正在呼叫員工資料 API: {_settings.EmployeeEndpoint} (CO_ID={coId})");
                 _logger.Info($"[HR API] 查詢時間範圍: {startTime:yyyy-MM-dd HH:mm:ss} ~ {endTime:yyyy-MM-dd HH:mm:ss}");
 
                 var response = await _httpClient.PostAsync(_settings.EmployeeEndpoint, content);
@@ -135,7 +200,7 @@ namespace Sync104ToBpmErp.Services
                 if (apiResponse?.IsSuccess == true && apiResponse.Data != null)
                 {
                     var count = apiResponse.Data.Count;
-                    _logger.Info($"[HR API] 成功取得 {count} 筆員工資料");
+                    _logger.Info($"[HR API] 成功取得 {count} 筆員工資料 (CO_ID={coId})");
                     return apiResponse.Data;
                 }
 
@@ -143,7 +208,7 @@ namespace Sync104ToBpmErp.Services
                 var employees = JsonSerializer.Deserialize<List<Employee>>(jsonString);
                 if (employees != null)
                 {
-                    _logger.Info($"[HR API] 成功取得 {employees.Count} 筆員工資料 (直接格式)");
+                    _logger.Info($"[HR API] 成功取得 {employees.Count} 筆員工資料 (直接格式, CO_ID={coId})");
                     return employees;
                 }
 
@@ -160,11 +225,13 @@ namespace Sync104ToBpmErp.Services
         /// <summary>
         /// 取得所有部門資料 (依時間範圍)
         /// </summary>
-        public async Task<List<Department>> GetDepartmentsAsync(DateTime startTime, DateTime endTime)
+        public async Task<List<Department>> GetDepartmentsAsync(DateTime startTime, DateTime endTime, long? companyId = null)
         {
             try
             {
                 await SetAuthorizationHeaderAsync();
+
+                var coId = ResolveCompanyId(companyId);
 
                 // 格式化時間參數 (yyyy-MM-dd HH:mm:ss 格式)
                 var startTimeStr = startTime.ToString("yyyy-MM-dd HH:mm:ss");
@@ -175,7 +242,7 @@ namespace Sync104ToBpmErp.Services
                 var requestBody = new
                 {
                     ACCESS_TOKEN = _accessToken,
-                    CO_ID = _settings.CompanyId,
+                    CO_ID = coId,
                     ORG_TYPE_CODE = _settings.OrgTypeCode,
                     BASE_DATE = _settings.BaseDate,
                     E_SDATETIME = startTimeStr,
@@ -187,7 +254,7 @@ namespace Sync104ToBpmErp.Services
                     Encoding.UTF8,
                     "application/json");
 
-                _logger.Info($"[HR API] 正在呼叫部門資料 API: {_settings.DepartmentEndpoint}");
+                _logger.Info($"[HR API] 正在呼叫部門資料 API: {_settings.DepartmentEndpoint} (CO_ID={coId})");
                 _logger.Info($"[HR API] 查詢時間範圍: {startTime:yyyy-MM-dd HH:mm:ss} ~ {endTime:yyyy-MM-dd HH:mm:ss}");
 
                 var response = await _httpClient.PostAsync(_settings.DepartmentEndpoint, content);
@@ -203,7 +270,7 @@ namespace Sync104ToBpmErp.Services
                 if (apiResponse?.IsSuccess == true && apiResponse.Data != null)
                 {
                     var count = apiResponse.Data.Count;
-                    _logger.Info($"[HR API] 成功取得 {count} 筆部門資料");
+                    _logger.Info($"[HR API] 成功取得 {count} 筆部門資料 (CO_ID={coId})");
                     return apiResponse.Data;
                 }
 
@@ -211,7 +278,7 @@ namespace Sync104ToBpmErp.Services
                 var departments = JsonSerializer.Deserialize<List<Department>>(jsonString);
                 if (departments != null)
                 {
-                    _logger.Info($"[HR API] 成功取得 {departments.Count} 筆部門資料 (直接格式)");
+                    _logger.Info($"[HR API] 成功取得 {departments.Count} 筆部門資料 (直接格式, CO_ID={coId})");
                     return departments;
                 }
 
@@ -228,20 +295,21 @@ namespace Sync104ToBpmErp.Services
         /// <summary>
         /// 取得部門層級資料
         /// </summary>
-        public async Task<List<DeptHierarchy>> GetDeptHierarchyAsync()
+        public async Task<List<DeptHierarchy>> GetDeptHierarchyAsync(long? companyId = null)
         {
             try
             {
                 await SetAuthorizationHeaderAsync();
 
-                _logger.Info($"[HR API] 正在呼叫部門層級資料 API: {_settings.HierarchyEndpoint}");
+                var coId = ResolveCompanyId(companyId);
+
+                _logger.Info($"[HR API] 正在呼叫部門層級資料 API: {_settings.HierarchyEndpoint} (CO_ID={coId})");
 
                 // 建立 POST 請求內容，符合 104 HR Max API 規格
-                // 參考文件: /api/os/dept_level 需要 ORG_TYPE_CODE 和 BASE_DATE
                 var requestBody = new
                 {
                     ACCESS_TOKEN = _accessToken,
-                    CO_ID = _settings.CompanyId,
+                    CO_ID = coId,
                     ORG_TYPE_CODE = _settings.OrgTypeCode,
                     BASE_DATE = _settings.BaseDate
                 };
@@ -264,7 +332,7 @@ namespace Sync104ToBpmErp.Services
                 if (apiResponse?.IsSuccess == true && apiResponse.Data != null)
                 {
                     var count = apiResponse.Data.Count;
-                    _logger.Info($"[HR API] 成功取得 {count} 筆部門層級資料");
+                    _logger.Info($"[HR API] 成功取得 {count} 筆部門層級資料 (CO_ID={coId})");
                     return apiResponse.Data;
                 }
 
@@ -272,7 +340,7 @@ namespace Sync104ToBpmErp.Services
                 var hierarchy = JsonSerializer.Deserialize<List<DeptHierarchy>>(jsonString);
                 if (hierarchy != null)
                 {
-                    _logger.Info($"[HR API] 成功取得 {hierarchy.Count} 筆部門層級資料 (直接格式)");
+                    _logger.Info($"[HR API] 成功取得 {hierarchy.Count} 筆部門層級資料 (直接格式, CO_ID={coId})");
                     return hierarchy;
                 }
 

@@ -259,3 +259,20 @@ ALTER TABLE YCS.GEN_FILE ADD (
                ));
 
 GRANT DELETE, INDEX, INSERT, SELECT, UPDATE ON YCS.GEN_FILE TO PUBLIC;
+
+
+
+select a.organizationUnitName,b.userName,c.organizationUnitName
+  from OrganizationUnit a
+       inner join Users b on a.managerOID = b.OID
+     inner join OrganizationUnit c on a.superUnitOID = c.OID
+
+select top 3 a.*,b.*
+  from Employee a
+       inner join Users b on a.userOid = b.OID
+
+select top 3 a.*,b.*
+  from Employee a
+       inner join Users b on a.userOid = b.OID
+
+       

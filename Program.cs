@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Oracle.ManagedDataAccess.Client;
 using Sync104ToBpmErp.Configuration;
+using Sync104ToBpmErp.Models;
 using Sync104ToBpmErp.Services;
 
 namespace Sync104ToBpmErp
@@ -305,6 +306,8 @@ namespace Sync104ToBpmErp
 
         /// <summary>
         /// 測試 HR API (不連資料庫)
+        /// 1. 從 /api/os/company 取得公司清單 (CO_ID, CO_CODE)
+        /// 2. 對每家公司執行員工/部門/部門層級 API 測試
         /// </summary>
         static async Task TestHRApiAsync(AppSettings settings, ILoggerService logger)
         {
@@ -328,71 +331,111 @@ namespace Sync104ToBpmErp
                 Console.WriteLine($"   ✗ 取得 Token 失敗: {ex.Message}");
                 logger.Error("API 測試 - 取得 Token 失敗", ex);
                 hasError = true;
+                Console.WriteLine();
+                Console.WriteLine("[API 測試] 無法取得 Token，後續測試無法繼續 ⚠️");
+                return;
+            }
+
+            // 2. 從 /api/os/company 取得公司清單
+            List<CompanyInfo> companies;
+            try
+            {
+                Console.WriteLine("2. 取得公司清單 (/api/os/company)...");
+                companies = await hrService.GetCompaniesAsync();
+                Console.WriteLine($"   ✓ 取得 {companies.Count} 筆公司資料");
+                foreach (var c in companies)
+                {
+                    Console.WriteLine($"     CO_ID={c.CompanyId}, CO_CODE={c.CompanyCode}, CO_NAME={c.CompanyName}");
+                }
+                Console.WriteLine();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"   ✗ 取得公司清單失敗: {ex.Message}");
+                logger.Error("API 測試 - 取得公司清單失敗", ex);
+                Console.WriteLine();
+                Console.WriteLine("[API 測試] 無法取得公司清單，後續測試無法繼續 ⚠️");
+                return;
+            }
+
+            if (companies.Count == 0)
+            {
+                Console.WriteLine("[API 測試] 公司清單為空，無資料可測試 ⚠️");
+                return;
             }
 
             // 設定時間範圍 (最近一年)
             var endTime = DateTime.Now;
             var startTime = endTime.AddDays(-365);
 
-            // 2. 測試取得員工資料
-            try
+            // 3. 依公司 loop 測試各 API
+            foreach (var company in companies)
             {
-                Console.WriteLine($"2. 測試取得員工資料 ({startTime:yyyy-MM-dd} ~ {endTime:yyyy-MM-dd})...");
-                var employees = await hrService.GetEmployeesAsync(startTime, endTime);
-                Console.WriteLine($"   ✓ 取得 {employees.Count} 筆員工資料");
-                if (employees.Count > 0)
-                {
-                    Console.WriteLine($"   第一筆: {employees[0].EmpNo} - {employees[0].EmpName} ({employees[0].DeptName})");
-                }
-                Console.WriteLine();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"   ✗ 取得員工資料失敗: {ex.Message}");
-                logger.Error("API 測試 - 取得員工資料失敗", ex);
-                hasError = true;
-            }
+                var coId = company.CompanyId;
+                Console.WriteLine($"========================================");
+                Console.WriteLine($"處理公司: CO_ID={coId}, CO_CODE={company.CompanyCode}, CO_NAME={company.CompanyName}");
+                Console.WriteLine($"========================================");
 
-            // 3. 測試取得部門資料
-            try
-            {
-                Console.WriteLine($"3. 測試取得部門資料 ({startTime:yyyy-MM-dd} ~ {endTime:yyyy-MM-dd})...");
-                var departments = await hrService.GetDepartmentsAsync(startTime, endTime);
-                Console.WriteLine($"   ✓ 取得 {departments.Count} 筆部門資料");
-                if (departments.Count > 0)
+                // 3.1 測試取得員工資料
+                try
                 {
-                    Console.WriteLine($"   第一筆: {departments[0].DeptCode} - {departments[0].DeptName}");
+                    Console.WriteLine($"3.1 測試取得員工資料 (CO_ID={coId}, {startTime:yyyy-MM-dd} ~ {endTime:yyyy-MM-dd})...");
+                    var employees = await hrService.GetEmployeesAsync(startTime, endTime, coId);
+                    Console.WriteLine($"   ✓ 取得 {employees.Count} 筆員工資料");
+                    if (employees.Count > 0)
+                    {
+                        Console.WriteLine($"   第一筆: {employees[0].EmpNo} - {employees[0].EmpName} ({employees[0].DeptName})");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"   ✗ 取得員工資料失敗 (CO_ID={coId}): {ex.Message}");
+                    logger.Error($"API 測試 - 取得員工資料失敗 (CO_ID={coId})", ex);
+                    hasError = true;
                 }
                 Console.WriteLine();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"   ✗ 取得部門資料失敗: {ex.Message}");
-                logger.Error("API 測試 - 取得部門資料失敗", ex);
-                hasError = true;
-            }
 
-            // 4. 測試取得部門層級資料
-            try
-            {
-                Console.WriteLine("4. 測試取得部門層級資料...");
-                var hierarchy = await hrService.GetDeptHierarchyAsync();
-                Console.WriteLine($"   ✓ 取得 {hierarchy.Count} 筆部門層級資料");
-                if (hierarchy.Count > 0)
+                // 3.2 測試取得部門資料
+                try
                 {
-                    Console.WriteLine($"   第一筆: {hierarchy[0].LevelName} (ID: {hierarchy[0].DeptLevelId})");
+                    Console.WriteLine($"3.2 測試取得部門資料 (CO_ID={coId}, {startTime:yyyy-MM-dd} ~ {endTime:yyyy-MM-dd})...");
+                    var departments = await hrService.GetDepartmentsAsync(startTime, endTime, coId);
+                    Console.WriteLine($"   ✓ 取得 {departments.Count} 筆部門資料");
+                    if (departments.Count > 0)
+                    {
+                        Console.WriteLine($"   第一筆: {departments[0].DeptCode} - {departments[0].DeptName}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"   ✗ 取得部門資料失敗 (CO_ID={coId}): {ex.Message}");
+                    logger.Error($"API 測試 - 取得部門資料失敗 (CO_ID={coId})", ex);
+                    hasError = true;
                 }
                 Console.WriteLine();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"   ✗ 取得部門層級資料失敗: {ex.Message}");
-                logger.Error("API 測試 - 取得部門層級資料失敗", ex);
-                hasError = true;
+
+                // 3.3 測試取得部門層級資料
+                try
+                {
+                    Console.WriteLine($"3.3 測試取得部門層級資料 (CO_ID={coId})...");
+                    var hierarchy = await hrService.GetDeptHierarchyAsync(coId);
+                    Console.WriteLine($"   ✓ 取得 {hierarchy.Count} 筆部門層級資料");
+                    if (hierarchy.Count > 0)
+                    {
+                        Console.WriteLine($"   第一筆: {hierarchy[0].LevelName} (ID: {hierarchy[0].DeptLevelId})");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"   ✗ 取得部門層級資料失敗 (CO_ID={coId}): {ex.Message}");
+                    logger.Error($"API 測試 - 取得部門層級資料失敗 (CO_ID={coId})", ex);
+                    hasError = true;
+                }
+                Console.WriteLine();
             }
 
             // 總結結果
-            Console.WriteLine();
+            Console.WriteLine("========================================");
             if (hasError)
             {
                 Console.WriteLine("[API 測試] 部分測試失敗，請查看上方詳細資訊 ⚠️");
