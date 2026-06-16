@@ -11,8 +11,6 @@ namespace Sync104ToBpmErp.Configuration
         public string EmployeeEndpoint { get; set; } = string.Empty;
         public string DepartmentEndpoint { get; set; } = string.Empty;
         public string HierarchyEndpoint { get; set; } = string.Empty;
-        public string ApiKey { get; set; } = string.Empty;
-
         // 104 HR Max API 認證資訊
         public string UserAccount { get; set; } = string.Empty;
         public string UserPassword { get; set; } = string.Empty;
@@ -44,6 +42,10 @@ namespace Sync104ToBpmErp.Configuration
         public int BatchSize { get; set; } = 100;
         public string LogDirectory { get; set; } = "Logs";
         public int SyncIntervalMinutes { get; set; } = 60;
+        /// <summary>
+        /// 新員工匯入 BPM Users 時的預設初始密碼
+        /// </summary>
+        public string DefaultPassword { get; set; } = "0000";
     }
 
     /// <summary>

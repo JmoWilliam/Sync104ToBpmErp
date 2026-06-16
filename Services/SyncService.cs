@@ -176,7 +176,7 @@ namespace Sync104ToBpmErp.Services
 
                 // 同步到 ERP abd_file（部門層級關係，用 Department.ParentDeptCode）
                 _logger.Info("[同步處理] 正在同步部門層級關係到 ERP (abd_file)...");
-                var abdResult = await ((ErpDatabaseService)_erpDatabaseService).SyncAbdFileFromDepartmentsAsync(departments);
+                var abdResult = await _erpDatabaseService.SyncAbdFileFromDepartmentsAsync(departments);
                 report.SetErpHierarchyResult(coId, abdResult);
 
                 _logger.Info($"[同步完成] 部門資料同步完成 (CO_ID={coId}) - " +

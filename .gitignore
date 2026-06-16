@@ -4,6 +4,12 @@
 ## Get latest from `dotnet new gitignore`
 
 deploy/
+
+# 客戶/環境專屬設定（含敏感連線資訊，不進版控）
+appsettings_Customer.json
+appsettings.Local.json
+appsettings.Production.json
+
 # dotenv files
 .env
 

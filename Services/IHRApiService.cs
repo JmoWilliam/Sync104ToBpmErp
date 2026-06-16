@@ -5,7 +5,7 @@ namespace Sync104ToBpmErp.Services
     /// <summary>
     /// HR API 服務介面
     /// </summary>
-    public interface IHRApiService
+    public interface IHRApiService : IDisposable
     {
         /// <summary>
         /// 取得 Access Token

@@ -19,7 +19,6 @@ namespace Sync104ToBpmErp.Services
 
             var logFilePath = Path.Combine(_logDirectory, $"SyncLog_{DateTime.Now:yyyyMMdd}.txt");
             var errorLogPath = Path.Combine(_logDirectory, $"ErrorLog_{DateTime.Now:yyyyMMdd}.txt");
-            var syncDetailLogPath = Path.Combine(_logDirectory, $"SyncDetail_{DateTime.Now:yyyyMMdd}.txt");
 
             // 一般記錄 (Info 以上)
             _logger = new LoggerConfiguration()

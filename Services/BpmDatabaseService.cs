@@ -24,12 +24,14 @@ namespace Sync104ToBpmErp.Services
         private readonly string _connectionString;
         private readonly ILoggerService _logger;
         private readonly int _batchSize;
+        private readonly string _defaultPassword;
 
-        public BpmDatabaseService(DatabaseSettings settings, ILoggerService logger, int batchSize = 100)
+        public BpmDatabaseService(DatabaseSettings settings, ILoggerService logger, int batchSize = 100, string defaultPassword = "0000")
         {
             _connectionString = settings.ConnectionString;
             _logger = logger;
             _batchSize = batchSize;
+            _defaultPassword = defaultPassword;
         }
 
         public string GetDatabaseName() => "BPM (MS-SQL)";
@@ -51,6 +53,42 @@ namespace Sync104ToBpmErp.Services
                 return false;
             }
         }
+
+        #region 拓撲排序
+
+        /// <summary>
+        /// 對部門清單做拓撲排序，確保父部門永遠排在子部門前面。
+        /// 這樣同步時子部門查詢 superUnitOID 才能找到已存在的父部門。
+        /// </summary>
+        private static List<Department> TopologicalSortDepartments(List<Department> departments)
+        {
+            var deptMap = departments.ToDictionary(d => d.DeptCode, d => d);
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var result = new List<Department>(departments.Count);
+
+            void Visit(Department dept)
+            {
+                if (visited.Contains(dept.DeptCode)) return;
+                visited.Add(dept.DeptCode);
+
+                // 先遞迴處理父部門（若父部門也在清單中且不是自己）
+                if (!string.IsNullOrEmpty(dept.ParentDeptCode)
+                    && !dept.ParentDeptCode.Equals(dept.DeptCode, StringComparison.OrdinalIgnoreCase)
+                    && deptMap.TryGetValue(dept.ParentDeptCode, out var parent))
+                {
+                    Visit(parent);
+                }
+
+                result.Add(dept);
+            }
+
+            foreach (var dept in departments)
+                Visit(dept);
+
+            return result;
+        }
+
+        #endregion
 
         #region OID Helper
 
@@ -122,51 +160,52 @@ namespace Sync104ToBpmErp.Services
                     _logger.Warning($"[BPM] 找不到 Organization (CO_CODE={coCode})，部門將不帶 organizationOID");
                 }
 
-                result.TotalCount = departments.Count;
+                // ── 批量預載入查詢對照表（避免 N+1 問題） ──
+                var userOidMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var row in await connection.QueryAsync(
+                    "SELECT [id], [OID] FROM [Users]", transaction: transaction))
+                    userOidMap[(string)row.id] = (string)row.OID;
+
+                // orgUnitOidMap 在迴圈中會即時更新（新 INSERT 後加入），
+                // 配合拓撲排序確保父部門先寫入再被子部門查詢
+                var orgUnitOidMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var row in await connection.QueryAsync(
+                    "SELECT [id], [OID] FROM [OrganizationUnit]", transaction: transaction))
+                    orgUnitOidMap[(string)row.id] = (string)row.OID;
+
+                var levelOidMap = new Dictionary<(int, string?), string>();
+                foreach (var row in await connection.QueryAsync(
+                    "SELECT [levelValue], [organizationOID], [OID] FROM [OrganizationUnitLevel]",
+                    transaction: transaction))
+                {
+                    levelOidMap[((int)row.levelValue, (string?)row.organizationOID)] = (string)row.OID;
+                }
+
+                // ── 拓撲排序：確保父部門排在子部門前 ──
+                var sorted = TopologicalSortDepartments(departments);
+
+                result.TotalCount = sorted.Count;
                 int processedCount = 0;
 
-                foreach (var dept in departments)
+                foreach (var dept in sorted)
                 {
                     processedCount++;
                     try
                     {
-                        // 查詢已存在的 OID (by id = DEPT_CODE)
-                        var existingOid = await connection.QueryFirstOrDefaultAsync<string>(
-                            "SELECT [OID] FROM [OrganizationUnit] WHERE [id] = @Id",
-                            new { Id = dept.DeptCode },
-                            transaction);
+                        // ── 查詢關聯 OID（全部用記憶體對照表，無額外 DB 查詢） ──
+                        orgUnitOidMap.TryGetValue(dept.DeptCode, out var existingOid);
 
-                        // ── 查詢關聯 OID ──
-                        // managerOID: LEADER_EMP_NO → Users.id → Users.OID
                         string? managerOID = null;
                         if (!string.IsNullOrEmpty(dept.LeaderEmpNo))
-                        {
-                            managerOID = await connection.QueryFirstOrDefaultAsync<string>(
-                                "SELECT [OID] FROM [Users] WHERE [id] = @EmpNo",
-                                new { EmpNo = dept.LeaderEmpNo },
-                                transaction);
-                        }
+                            userOidMap.TryGetValue(dept.LeaderEmpNo, out managerOID);
 
-                        // superUnitOID: PARENT_DEPT_CODE → OrganizationUnit.id → OrganizationUnit.OID
                         string? superUnitOID = null;
                         if (!string.IsNullOrEmpty(dept.ParentDeptCode))
-                        {
-                            superUnitOID = await connection.QueryFirstOrDefaultAsync<string>(
-                                "SELECT [OID] FROM [OrganizationUnit] WHERE [id] = @ParentId",
-                                new { ParentId = dept.ParentDeptCode },
-                                transaction);
-                        }
+                            orgUnitOidMap.TryGetValue(dept.ParentDeptCode, out superUnitOID);
 
-                        // levelOID: DEPT_LEVEL_ID → OrganizationUnitLevel.OID
-                        // OrganizationUnitLevel 用 levelValue 存 DeptLevelId，查它
                         string? levelOID = null;
                         if (dept.DeptLevelId.HasValue)
-                        {
-                            levelOID = await connection.QueryFirstOrDefaultAsync<string>(
-                                "SELECT [OID] FROM [OrganizationUnitLevel] WHERE [levelValue] = @LevelValue AND [organizationOID] = @OrgOID",
-                                new { LevelValue = (int)dept.DeptLevelId.Value, OrgOID = organizationOID ?? (object)DBNull.Value },
-                                transaction);
-                        }
+                            levelOidMap.TryGetValue(((int)dept.DeptLevelId.Value, organizationOID), out levelOID);
 
                         if (!string.IsNullOrEmpty(existingOid))
                         {
@@ -228,13 +267,15 @@ namespace Sync104ToBpmErp.Services
                                 },
                                 transaction);
 
+                            // 新插入的部門加入對照表，供後續子部門查詢 superUnitOID
+                            orgUnitOidMap[dept.DeptCode] = oid;
                             _logger.LogSyncDetail("OrganizationUnit", "INSERT", dept.DeptCode, true);
                         }
 
                         result.SuccessCount++;
 
                         if (processedCount % 100 == 0)
-                            _logger.Info($"[{GetDatabaseName()}] 部門同步進度: {processedCount}/{departments.Count}");
+                            _logger.Info($"[{GetDatabaseName()}] 部門同步進度: {processedCount}/{sorted.Count}");
                     }
                     catch (Exception ex)
                     {
@@ -457,8 +498,7 @@ namespace Sync104ToBpmErp.Services
                                     OID = userOID,
                                     Id = emp.EmpNo,
                                     UserName = emp.EmpName,
-                                    //--待確認 password 規則
-                                    Password = "0000",
+                                    Password = _defaultPassword,
                                     LeaveDate = (object?)emp.QuitDate ?? DBNull.Value,
                                     MailAddress = (object?)emp.Email ?? DBNull.Value,
                                     Phone = (object?)emp.Phone ?? DBNull.Value
@@ -573,6 +613,9 @@ namespace Sync104ToBpmErp.Services
             => Task.FromResult(new SyncResult { DataType = "gem_file", TargetSystem = "BPM(跳過)" });
 
         public Task<SyncResult> SyncAbdFileAsync(List<DeptHierarchy> hierarchy)
+            => Task.FromResult(new SyncResult { DataType = "abd_file", TargetSystem = "BPM(跳過)" });
+
+        public Task<SyncResult> SyncAbdFileFromDepartmentsAsync(List<Department> departments)
             => Task.FromResult(new SyncResult { DataType = "abd_file", TargetSystem = "BPM(跳過)" });
 
         public Task<SyncResult> SyncGenFileAsync(List<Employee> employees)

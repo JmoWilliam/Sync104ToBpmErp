@@ -48,9 +48,14 @@ namespace Sync104ToBpmErp.Services
         Task<SyncResult> SyncGemFileAsync(List<Department> departments);
 
         /// <summary>
-        /// ERP: 同步部門層級資料到 abd_file
+        /// ERP: 同步部門層級資料到 abd_file (從 dept_level API，已棄用)
         /// </summary>
         Task<SyncResult> SyncAbdFileAsync(List<DeptHierarchy> hierarchy);
+
+        /// <summary>
+        /// ERP: 同步部門層級關係到 abd_file (從 Department.ParentDeptCode)
+        /// </summary>
+        Task<SyncResult> SyncAbdFileFromDepartmentsAsync(List<Department> departments);
 
         /// <summary>
         /// ERP: 同步員工資料到 gen_file

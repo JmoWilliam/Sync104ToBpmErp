@@ -10,7 +10,7 @@ namespace Sync104ToBpmErp.Services
     /// <summary>
     /// HR API 服務實作
     /// </summary>
-    public class HRApiService : IHRApiService
+    public class HRApiService : IHRApiService, IDisposable
     {
         private readonly HttpClient _httpClient;
         private readonly HRApiSettings _settings;
@@ -27,6 +27,12 @@ namespace Sync104ToBpmErp.Services
                 BaseAddress = new Uri(settings.BaseUrl),
                 Timeout = TimeSpan.FromSeconds(60)
             };
+        }
+
+        public void Dispose()
+        {
+            _httpClient.Dispose();
+            GC.SuppressFinalize(this);
         }
 
         /// <summary>

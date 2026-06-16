@@ -76,7 +76,7 @@ namespace Sync104ToBpmErp
                             {
                                 Console.WriteLine("錯誤: 同步模式需要提供開始時間和截止時間");
                                 Console.WriteLine("使用方式: Sync104ToBpmErp.exe --sync \"2024-01-01 00:00:00\" \"2024-12-31 23:59:59\"");
-                                Console.WriteLine("或互動式輸入: Sync104ToBpmErp.exe --sync");
+                                Console.WriteLine("互動模式: 直接執行 Sync104ToBpmErp.exe（不帶任何參數）");
                             }
                             return;
 
@@ -290,7 +290,7 @@ namespace Sync104ToBpmErp
         {
             // 建立服務實例
             var hrService = new HRApiService(settings.HRApi, logger);
-            var bpmService = new BpmDatabaseService(settings.BpmDatabase, logger, settings.SyncSettings.BatchSize);
+            var bpmService = new BpmDatabaseService(settings.BpmDatabase, logger, settings.SyncSettings.BatchSize, settings.SyncSettings.DefaultPassword);
             var erpService = new ErpDatabaseService(settings.ErpDatabase, logger, settings.SyncSettings.BatchSize);
 
             // 建立同步服務
