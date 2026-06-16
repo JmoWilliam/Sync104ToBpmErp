@@ -5,6 +5,12 @@ namespace Sync104ToBpmErp.Services
 {
     /// <summary>
     /// 同步服務 - 協調 HR API 與各目標系統的資料同步
+    /// 對照表: api_erp_bpm_mapping.md
+    ///
+    /// 同步項目:
+    ///   BPM: OrganizationUnit, OrganizationUnitLevel, Users, Employee
+    ///   ERP: gem_file, abd_file, gen_file
+    /// 不同步: Organization, geu_file (已在管理端建立)
     /// </summary>
     public class SyncService
     {
@@ -50,7 +56,8 @@ namespace Sync104ToBpmErp.Services
                 await TestConnectionsAsync();
 
                 // ═══════════════════════════════════════════════
-                // Step 1: 取得公司清單（取代 appsettings CompanyId）
+                // Step 1: 取得公司清單（不寫入 Organization/geu_file）
+                //         → 公司只在 104 端管理，僅查詢比對
                 // ═══════════════════════════════════════════════
                 var companies = await _hrApiService.GetCompaniesAsync();
                 if (companies.Count == 0)
@@ -62,15 +69,11 @@ namespace Sync104ToBpmErp.Services
                     return report;
                 }
 
-                _logger.Info($"[公司清單] 取得 {companies.Count} 筆公司資料");
+                _logger.Info($"[公司清單] 取得 {companies.Count} 筆公司資料（僅查詢比對，不寫入 BPM/ERP）");
                 foreach (var c in companies)
                 {
                     _logger.Info($"  CO_ID={c.CompanyId}, CO_CODE={c.CompanyCode}, CO_NAME={c.CompanyName}");
                 }
-
-                // Step 1.5: 先將公司資料寫入 BPM Organization 表
-                var orgResult = await _bpmDatabaseService.SyncOrganizationAsync(companies);
-                report.BpmOrganizationResult = orgResult;
 
                 // ═══════════════════════════════════════════════
                 // Step 2: 依公司 Loop 執行同步
@@ -84,13 +87,13 @@ namespace Sync104ToBpmErp.Services
                     _logger.Info($"[公司處理] 開始處理公司 CO_ID={coId}, CO_CODE={coCode}");
                     _logger.Info("============================================");
 
-                    // ─── 2.2 部門層級資料（先同步，供部門參考） ───
+                    // ─── 2.1 部門層級名稱 (dept_level API → BPM OrganizationUnitLevel) ───
                     await SyncDeptHierarchyAsync(coId, report);
 
-                    // ─── 2.1 部門資料 ───
+                    // ─── 2.2 部門資料 (dept API → BPM OrganizationUnit + ERP gem_file + ERP abd_file) ───
                     await SyncDepartmentsAsync(startTime, endTime, coId, coCode, report);
 
-                    // ─── 2.3 員工資料 ───
+                    // ─── 2.3 員工資料 (emp API → BPM Users+Employee + ERP gen_file) ───
                     await SyncEmployeesAsync(startTime, endTime, coId, report);
                 }
 
@@ -141,7 +144,8 @@ namespace Sync104ToBpmErp.Services
         }
 
         /// <summary>
-        /// 2.1 同步部門資料（寫入 BPM OrganizationUnit + ERP gem_file）
+        /// 2.1 同步部門資料
+        ///     寫入: BPM OrganizationUnit + ERP gem_file + ERP abd_file
         /// </summary>
         private async Task SyncDepartmentsAsync(DateTime startTime, DateTime endTime, long coId, string coCode, SyncReport report)
         {
@@ -170,9 +174,15 @@ namespace Sync104ToBpmErp.Services
                 var erpResult = await _erpDatabaseService.SyncGemFileAsync(departments);
                 report.SetErpDepartmentResult(coId, erpResult);
 
+                // 同步到 ERP abd_file（部門層級關係，用 Department.ParentDeptCode）
+                _logger.Info("[同步處理] 正在同步部門層級關係到 ERP (abd_file)...");
+                var abdResult = await ((ErpDatabaseService)_erpDatabaseService).SyncAbdFileFromDepartmentsAsync(departments);
+                report.SetErpHierarchyResult(coId, abdResult);
+
                 _logger.Info($"[同步完成] 部門資料同步完成 (CO_ID={coId}) - " +
                     $"BPM: {bpmResult.SuccessCount}/{bpmResult.TotalCount}, " +
-                    $"ERP: {erpResult.SuccessCount}/{erpResult.TotalCount}");
+                    $"ERP gem: {erpResult.SuccessCount}/{erpResult.TotalCount}, " +
+                    $"ERP abd: {abdResult.SuccessCount}/{abdResult.TotalCount}");
             }
             catch (Exception ex)
             {
@@ -182,48 +192,43 @@ namespace Sync104ToBpmErp.Services
         }
 
         /// <summary>
-        /// 2.2 同步部門層級資料（寫入 BPM OrganizationUnitLevel + ERP abd_file）
+        /// 2.2 同步部門層級名稱（dept_level API → BPM OrganizationUnitLevel）
+        ///     注意: 部門層級關係不在這裡寫，改由 abd_file 從 Department.ParentDeptCode 寫入
         /// </summary>
         private async Task SyncDeptHierarchyAsync(long coId, SyncReport report)
         {
-            _logger.Info($"[同步開始] DeptHierarchy 資料 (CO_ID={coId})");
+            _logger.Info($"[同步開始] DeptHierarchy 層級名稱 (CO_ID={coId})");
 
             try
             {
-                // 從 HR API 取得部門層級資料
                 var hierarchy = await _hrApiService.GetDeptHierarchyAsync(coId);
 
                 if (hierarchy.Count == 0)
                 {
-                    _logger.Warning($"[HR API] 無部門層級資料 (CO_ID={coId})，跳過");
+                    _logger.Warning($"[HR API] 無部門層級名稱資料 (CO_ID={coId})，跳過");
                     return;
                 }
 
-                _logger.Info($"[同步處理] 取得 {hierarchy.Count} 筆部門層級資料 (CO_ID={coId})");
+                _logger.Info($"[同步處理] 取得 {hierarchy.Count} 筆部門層級名稱 (CO_ID={coId})");
 
                 // 同步到 BPM OrganizationUnitLevel
                 _logger.Info("[同步處理] 正在同步到 BPM (OrganizationUnitLevel)...");
                 var bpmResult = await _bpmDatabaseService.SyncOrganizationUnitLevelsAsync(hierarchy, coId);
                 report.SetBpmHierarchyResult(coId, bpmResult);
 
-                // 同步到 ERP abd_file
-                _logger.Info("[同步處理] 正在同步到 ERP (abd_file)...");
-                var erpResult = await _erpDatabaseService.SyncAbdFileAsync(hierarchy);
-                report.SetErpHierarchyResult(coId, erpResult);
-
-                _logger.Info($"[同步完成] 部門層級同步完成 (CO_ID={coId}) - " +
-                    $"BPM: {bpmResult.SuccessCount}/{bpmResult.TotalCount}, " +
-                    $"ERP: {erpResult.SuccessCount}/{erpResult.TotalCount}");
+                _logger.Info($"[同步完成] 部門層級名稱同步完成 (CO_ID={coId}) - " +
+                    $"BPM: {bpmResult.SuccessCount}/{bpmResult.TotalCount}");
             }
             catch (Exception ex)
             {
-                _logger.Error($"[同步錯誤] 同步部門層級資料時發生錯誤 (CO_ID={coId})", ex);
+                _logger.Error($"[同步錯誤] 同步部門層級名稱時發生錯誤 (CO_ID={coId})", ex);
                 throw;
             }
         }
 
         /// <summary>
-        /// 2.3 同步員工資料（寫入 BPM Users + Employee + ERP gen_file）
+        /// 2.3 同步員工資料
+        ///     寫入: BPM Users+Employee + ERP gen_file
         /// </summary>
         private async Task SyncEmployeesAsync(DateTime startTime, DateTime endTime, long coId, SyncReport report)
         {
@@ -231,7 +236,6 @@ namespace Sync104ToBpmErp.Services
 
             try
             {
-                // 從 HR API 取得員工資料
                 var employees = await _hrApiService.GetEmployeesAsync(startTime, endTime, coId);
 
                 if (employees.Count == 0)
@@ -278,13 +282,12 @@ namespace Sync104ToBpmErp.Services
         public bool Success { get; set; }
         public string? ErrorMessage { get; set; }
 
-        // BPM 各表結果（以公司為 key）
-        public SyncResult? BpmOrganizationResult { get; set; }
+        // BPM 各表結果（以公司 CO_ID 為 key）
         public Dictionary<long, SyncResult> BpmDepartmentResults { get; set; } = new();
         public Dictionary<long, SyncResult> BpmHierarchyResults { get; set; } = new();
         public Dictionary<long, SyncResult> BpmEmployeeResults { get; set; } = new();
 
-        // ERP 各表結果（以公司為 key）
+        // ERP 各表結果（以公司 CO_ID 為 key）
         public Dictionary<long, SyncResult> ErpDepartmentResults { get; set; } = new();
         public Dictionary<long, SyncResult> ErpHierarchyResults { get; set; } = new();
         public Dictionary<long, SyncResult> ErpEmployeeResults { get; set; } = new();
@@ -317,18 +320,16 @@ namespace Sync104ToBpmErp.Services
 
             // BPM 結果
             sb.AppendLine("--- BPM (電子簽核) 同步結果 ---");
-            if (BpmOrganizationResult != null)
-                sb.AppendLine($"  公司(Organization): {BpmOrganizationResult.SuccessCount}/{BpmOrganizationResult.TotalCount}");
             foreach (var kv in BpmDepartmentResults)
-                sb.AppendLine($"  部門(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
+                sb.AppendLine($"  部門 OrganizationUnit(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
             foreach (var kv in BpmHierarchyResults)
-                sb.AppendLine($"  層級(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
+                sb.AppendLine($"  層級名 OrganizationUnitLevel(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
             foreach (var kv in BpmEmployeeResults)
-                sb.AppendLine($"  員工(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
+                sb.AppendLine($"  員工 Employee+Users(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
             sb.AppendLine();
 
             // ERP 結果
-            sb.AppendLine("--- ERP 同步結果 ---");
+            sb.AppendLine("--- ERP (TIPTOP) 同步結果 ---");
             foreach (var kv in ErpDepartmentResults)
                 sb.AppendLine($"  部門 gem_file(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
             foreach (var kv in ErpHierarchyResults)
@@ -339,7 +340,6 @@ namespace Sync104ToBpmErp.Services
 
             // 錯誤詳情
             var allErrors = new List<string>();
-            if (BpmOrganizationResult?.Errors.Count > 0) allErrors.AddRange(BpmOrganizationResult.Errors);
             foreach (var kv in BpmDepartmentResults) allErrors.AddRange(kv.Value.Errors);
             foreach (var kv in BpmHierarchyResults) allErrors.AddRange(kv.Value.Errors);
             foreach (var kv in BpmEmployeeResults) allErrors.AddRange(kv.Value.Errors);
