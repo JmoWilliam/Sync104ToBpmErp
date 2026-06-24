@@ -33,7 +33,7 @@ namespace Sync104ToBpmErp.Services
         /// <summary>
         /// BPM: 同步部門層級資料到 OrganizationUnitLevel 表
         /// </summary>
-        Task<SyncResult> SyncOrganizationUnitLevelsAsync(List<DeptHierarchy> hierarchy, long coId);
+        Task<SyncResult> SyncOrganizationUnitLevelsAsync(List<DeptHierarchy> hierarchy, long coId, string coCode);
 
         /// <summary>
         /// BPM: 同步員工資料到 Users + Employee 表

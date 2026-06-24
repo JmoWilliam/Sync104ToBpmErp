@@ -209,32 +209,33 @@ namespace Sync104ToBpmErp.Services
 
                         if (!string.IsNullOrEmpty(existingOid))
                         {
-                            // ── Update ──
-                            await connection.ExecuteAsync(@"
-                                UPDATE [OrganizationUnit] SET
-                                    [organizationUnitName] = @OrgUnitName,
-                                    [managerOID]           = @ManagerOID,
-                                    [superUnitOID]         = @SuperUnitOID,
-                                    [levelOID]             = @LevelOID,
-                                    [organizationOID]      = @OrganizationOID,
-                                    [validType]            = @ValidType,
-                                    --待確認 organizationUnitType 對應104什麼值
-                                    [organizationUnitType] = 1,
-                                    [objectVersion]        = [objectVersion] + 1
-                                WHERE [OID] = @OID",
-                                new
-                                {
-                                    OID = existingOid,
-                                    OrgUnitName = dept.DeptName ?? "",
-                                    ManagerOID = (object?)managerOID ?? DBNull.Value,
-                                    SuperUnitOID = (object?)superUnitOID ?? DBNull.Value,
-                                    LevelOID = (object?)levelOID ?? DBNull.Value,
-                                    OrganizationOID = (object?)organizationOID ?? DBNull.Value,
-                                    ValidType = dept.IsAct == 1 ? 1 : 0
-                                },
-                                transaction);
+                            // ── 資料已存在，先跳過 (未來可能補 UPDATE) ──
+                            // await connection.ExecuteAsync(@"
+                            //     UPDATE [OrganizationUnit] SET
+                            //         [organizationUnitName] = @OrgUnitName,
+                            //         [managerOID]           = @ManagerOID,
+                            //         [superUnitOID]         = @SuperUnitOID,
+                            //         [levelOID]             = @LevelOID,
+                            //         [organizationOID]      = @OrganizationOID,
+                            //         [validType]            = @ValidType,
+                            //         --待確認 organizationUnitType 對應104什麼值
+                            //         [organizationUnitType] = 1,
+                            //         [objectVersion]        = [objectVersion] + 1
+                            //     WHERE [OID] = @OID",
+                            //     new
+                            //     {
+                            //         OID = existingOid,
+                            //         OrgUnitName = dept.DeptName ?? "",
+                            //         ManagerOID = (object?)managerOID ?? DBNull.Value,
+                            //         SuperUnitOID = (object?)superUnitOID ?? DBNull.Value,
+                            //         LevelOID = (object?)levelOID ?? DBNull.Value,
+                            //         OrganizationOID = (object?)organizationOID ?? DBNull.Value,
+                            //         ValidType = dept.IsAct == 1 ? 1 : 0
+                            //     },
+                            //     transaction);
 
-                            _logger.LogSyncDetail("OrganizationUnit", "UPDATE", dept.DeptCode, true);
+                            result.SkippedCount++;
+                            _logger.LogSyncDetail("OrganizationUnit", "SKIP(已存在)", dept.DeptCode, true);
                         }
                         else
                         {
@@ -270,9 +271,8 @@ namespace Sync104ToBpmErp.Services
                             // 新插入的部門加入對照表，供後續子部門查詢 superUnitOID
                             orgUnitOidMap[dept.DeptCode] = oid;
                             _logger.LogSyncDetail("OrganizationUnit", "INSERT", dept.DeptCode, true);
+                            result.SuccessCount++;
                         }
-
-                        result.SuccessCount++;
 
                         if (processedCount % 100 == 0)
                             _logger.Info($"[{GetDatabaseName()}] 部門同步進度: {processedCount}/{sorted.Count}");
@@ -304,7 +304,7 @@ namespace Sync104ToBpmErp.Services
 
         #region OrganizationUnitLevel（部門層級名稱）
 
-        public async Task<SyncResult> SyncOrganizationUnitLevelsAsync(List<DeptHierarchy> hierarchy, long coId)
+        public async Task<SyncResult> SyncOrganizationUnitLevelsAsync(List<DeptHierarchy> hierarchy, long coId, string coCode)
         {
             var result = new SyncResult { DataType = "OrganizationUnitLevel", TargetSystem = "BPM" };
             if (hierarchy == null || hierarchy.Count == 0) return result;
@@ -315,19 +315,12 @@ namespace Sync104ToBpmErp.Services
 
             try
             {
-                // OrganizationUnitLevel 透過 organizationOID 對應到公司
-                // 但 dept_level API 回傳的 CO_ID 要對應到 BPM Organization.id = CompanyCode
-                // 先透過 CO_ID 反查 104 company → CO_CODE → Organization.id
-                // 然而 dept_level API 沒有直接回傳 CO_CODE，這裡需要從外部傳入
-                // 解決方案: 用 CO_ID 去查公司對照表，或用傳入的 coId 去對應
-
-                // ── 待確認: coId 對應到 Organization.id (CO_CODE) 的方式 ──
-                // 目前需要由呼叫端傳入 companyCode
-                // 暫且先用 coId.ToString() 當作 CO_CODE 查 Organization
-                string? organizationOID = await GetOrganizationOIDAsync(connection, transaction, coId.ToString());
+                // OrganizationUnitLevel.organizationOID 對應到 Organization.OID，
+                // Organization.id = CO_CODE，由呼叫端 (SyncService) 傳入 coCode 查詢
+                string? organizationOID = await GetOrganizationOIDAsync(connection, transaction, coCode);
                 if (string.IsNullOrEmpty(organizationOID))
                 {
-                    _logger.Warning($"[BPM] 找不到 Organization (by CO_ID={coId})，層級將不帶 organizationOID");
+                    _logger.Warning($"[BPM] 找不到 Organization (CO_CODE={coCode})，層級將不帶 organizationOID");
                 }
 
                 result.TotalCount = hierarchy.Count;
@@ -348,17 +341,18 @@ namespace Sync104ToBpmErp.Services
 
                         if (!string.IsNullOrEmpty(existingOid))
                         {
-                            // ── Update ──
-                            await connection.ExecuteAsync(@"
-                                UPDATE [OrganizationUnitLevel] SET
-                                    [organizationUnitLevelName] = @LevelName,
-                                    [objectVersion] = [objectVersion] + 1
-                                    --待確認 description
-                                WHERE [OID] = @OID",
-                                new { OID = existingOid, LevelName = item.LevelName },
-                                transaction);
+                            // ── 資料已存在，先跳過 (未來可能補 UPDATE) ──
+                            // await connection.ExecuteAsync(@"
+                            //     UPDATE [OrganizationUnitLevel] SET
+                            //         [organizationUnitLevelName] = @LevelName,
+                            //         [objectVersion] = [objectVersion] + 1
+                            //         --待確認 description
+                            //     WHERE [OID] = @OID",
+                            //     new { OID = existingOid, LevelName = item.LevelName },
+                            //     transaction);
 
-                            _logger.LogSyncDetail("OrganizationUnitLevel", "UPDATE", item.LevelName, true);
+                            result.SkippedCount++;
+                            _logger.LogSyncDetail("OrganizationUnitLevel", "SKIP(已存在)", item.LevelName, true);
                         }
                         else
                         {
@@ -387,9 +381,8 @@ namespace Sync104ToBpmErp.Services
                                 transaction);
 
                             _logger.LogSyncDetail("OrganizationUnitLevel", "INSERT", item.LevelName, true);
+                            result.SuccessCount++;
                         }
-
-                        result.SuccessCount++;
 
                         if (processedCount % 100 == 0)
                             _logger.Info($"[{GetDatabaseName()}] 層級同步進度: {processedCount}/{hierarchy.Count}");
@@ -448,28 +441,29 @@ namespace Sync104ToBpmErp.Services
                             new { Id = emp.EmpNo },
                             transaction);
 
+                        bool userInserted = false;
                         if (!string.IsNullOrEmpty(userOID))
                         {
-                            // ── Update Users ──
-                            await connection.ExecuteAsync(@"
-                                UPDATE [Users] SET
-                                    [userName]          = @UserName,
-                                    [mailAddress]       = @MailAddress,
-                                    [phoneNumber]       = @Phone,
-                                    [leaveDate]         = @LeaveDate,
-                                    [objectVersion]     = [objectVersion] + 1
-                                WHERE [OID] = @OID",
-                                new
-                                {
-                                    OID = userOID,
-                                    UserName = emp.EmpName,
-                                    MailAddress = (object?)emp.Email ?? DBNull.Value,
-                                    Phone = (object?)emp.Phone ?? DBNull.Value,
-                                    LeaveDate = (object?)emp.QuitDate ?? DBNull.Value
-                                },
-                                transaction);
+                            // ── 資料已存在，先跳過 (未來可能補 UPDATE) ──
+                            // await connection.ExecuteAsync(@"
+                            //     UPDATE [Users] SET
+                            //         [userName]          = @UserName,
+                            //         [mailAddress]       = @MailAddress,
+                            //         [phoneNumber]       = @Phone,
+                            //         [leaveDate]         = @LeaveDate,
+                            //         [objectVersion]     = [objectVersion] + 1
+                            //     WHERE [OID] = @OID",
+                            //     new
+                            //     {
+                            //         OID = userOID,
+                            //         UserName = emp.EmpName,
+                            //         MailAddress = (object?)emp.Email ?? DBNull.Value,
+                            //         Phone = (object?)emp.Phone ?? DBNull.Value,
+                            //         LeaveDate = (object?)emp.QuitDate ?? DBNull.Value
+                            //     },
+                            //     transaction);
 
-                            _logger.LogSyncDetail("Users", "UPDATE", emp.EmpNo, true);
+                            _logger.LogSyncDetail("Users", "SKIP(已存在)", emp.EmpNo, true);
                         }
                         else
                         {
@@ -505,6 +499,7 @@ namespace Sync104ToBpmErp.Services
                                 },
                                 transaction);
 
+                            userInserted = true;
                             _logger.LogSyncDetail("Users", "INSERT", emp.EmpNo, true);
                         }
 
@@ -529,26 +524,27 @@ namespace Sync104ToBpmErp.Services
                             new { EmpNo = emp.EmpNo },
                             transaction);
 
+                        bool empInserted = false;
                         if (!string.IsNullOrEmpty(empOID))
                         {
-                            // ── Update Employee ──
-                            await connection.ExecuteAsync(@"
-                                UPDATE [Employee] SET
-                                    [organizationOID] = @OrganizationOID,
-                                    [userOID]          = @UserOID,
-                                    [objectVersion]    = [objectVersion] + 1,
-                                    [validTo]          = @ValidTo
-                                WHERE [OID] = @OID",
-                                new
-                                {
-                                    OID = empOID,
-                                    OrganizationOID = (object?)organizationOID ?? DBNull.Value,
-                                    UserOID = userOID,
-                                    ValidTo = (object?)emp.QuitDate ?? DBNull.Value
-                                },
-                                transaction);
+                            // ── 資料已存在，先跳過 (未來可能補 UPDATE) ──
+                            // await connection.ExecuteAsync(@"
+                            //     UPDATE [Employee] SET
+                            //         [organizationOID] = @OrganizationOID,
+                            //         [userOID]          = @UserOID,
+                            //         [objectVersion]    = [objectVersion] + 1,
+                            //         [validTo]          = @ValidTo
+                            //     WHERE [OID] = @OID",
+                            //     new
+                            //     {
+                            //         OID = empOID,
+                            //         OrganizationOID = (object?)organizationOID ?? DBNull.Value,
+                            //         UserOID = userOID,
+                            //         ValidTo = (object?)emp.QuitDate ?? DBNull.Value
+                            //     },
+                            //     transaction);
 
-                            _logger.LogSyncDetail("Employee", "UPDATE", emp.EmpNo, true);
+                            _logger.LogSyncDetail("Employee", "SKIP(已存在)", emp.EmpNo, true);
                         }
                         else
                         {
@@ -574,10 +570,15 @@ namespace Sync104ToBpmErp.Services
                                 },
                                 transaction);
 
+                            empInserted = true;
                             _logger.LogSyncDetail("Employee", "INSERT", emp.EmpNo, true);
                         }
 
-                        result.SuccessCount++;
+                        // 此筆員工只要 Users 或 Employee 任一筆有新增即視為成功新增；兩者皆已存在則視為跳過
+                        if (userInserted || empInserted)
+                            result.SuccessCount++;
+                        else
+                            result.SkippedCount++;
 
                         if (processedCount % 100 == 0)
                             _logger.Info($"[{GetDatabaseName()}] 員工同步進度: {processedCount}/{employees.Count}");

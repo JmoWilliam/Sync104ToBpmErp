@@ -88,7 +88,7 @@ namespace Sync104ToBpmErp.Services
                     _logger.Info("============================================");
 
                     // ─── 2.1 部門層級名稱 (dept_level API → BPM OrganizationUnitLevel) ───
-                    await SyncDeptHierarchyAsync(coId, report);
+                    await SyncDeptHierarchyAsync(coId, coCode, report);
 
                     // ─── 2.2 部門資料 (dept API → BPM OrganizationUnit + ERP gem_file + ERP abd_file) ───
                     await SyncDepartmentsAsync(startTime, endTime, coId, coCode, report);
@@ -195,7 +195,7 @@ namespace Sync104ToBpmErp.Services
         /// 2.2 同步部門層級名稱（dept_level API → BPM OrganizationUnitLevel）
         ///     注意: 部門層級關係不在這裡寫，改由 abd_file 從 Department.ParentDeptCode 寫入
         /// </summary>
-        private async Task SyncDeptHierarchyAsync(long coId, SyncReport report)
+        private async Task SyncDeptHierarchyAsync(long coId, string coCode, SyncReport report)
         {
             _logger.Info($"[同步開始] DeptHierarchy 層級名稱 (CO_ID={coId})");
 
@@ -213,7 +213,7 @@ namespace Sync104ToBpmErp.Services
 
                 // 同步到 BPM OrganizationUnitLevel
                 _logger.Info("[同步處理] 正在同步到 BPM (OrganizationUnitLevel)...");
-                var bpmResult = await _bpmDatabaseService.SyncOrganizationUnitLevelsAsync(hierarchy, coId);
+                var bpmResult = await _bpmDatabaseService.SyncOrganizationUnitLevelsAsync(hierarchy, coId, coCode);
                 report.SetBpmHierarchyResult(coId, bpmResult);
 
                 _logger.Info($"[同步完成] 部門層級名稱同步完成 (CO_ID={coId}) - " +
@@ -321,21 +321,21 @@ namespace Sync104ToBpmErp.Services
             // BPM 結果
             sb.AppendLine("--- BPM (電子簽核) 同步結果 ---");
             foreach (var kv in BpmDepartmentResults)
-                sb.AppendLine($"  部門 OrganizationUnit(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
+                sb.AppendLine($"  部門 OrganizationUnit(CO_ID={kv.Key}): 新增 {kv.Value.SuccessCount}/{kv.Value.TotalCount}, 跳過(已存在) {kv.Value.SkippedCount}");
             foreach (var kv in BpmHierarchyResults)
-                sb.AppendLine($"  層級名 OrganizationUnitLevel(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
+                sb.AppendLine($"  層級名 OrganizationUnitLevel(CO_ID={kv.Key}): 新增 {kv.Value.SuccessCount}/{kv.Value.TotalCount}, 跳過(已存在) {kv.Value.SkippedCount}");
             foreach (var kv in BpmEmployeeResults)
-                sb.AppendLine($"  員工 Employee+Users(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
+                sb.AppendLine($"  員工 Employee+Users(CO_ID={kv.Key}): 新增 {kv.Value.SuccessCount}/{kv.Value.TotalCount}, 跳過(已存在) {kv.Value.SkippedCount}");
             sb.AppendLine();
 
             // ERP 結果
             sb.AppendLine("--- ERP (TIPTOP) 同步結果 ---");
             foreach (var kv in ErpDepartmentResults)
-                sb.AppendLine($"  部門 gem_file(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
+                sb.AppendLine($"  部門 gem_file(CO_ID={kv.Key}): 新增 {kv.Value.SuccessCount}/{kv.Value.TotalCount}, 跳過(已存在) {kv.Value.SkippedCount}");
             foreach (var kv in ErpHierarchyResults)
-                sb.AppendLine($"  層級 abd_file(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
+                sb.AppendLine($"  層級 abd_file(CO_ID={kv.Key}): 新增 {kv.Value.SuccessCount}/{kv.Value.TotalCount}, 跳過(已存在) {kv.Value.SkippedCount}");
             foreach (var kv in ErpEmployeeResults)
-                sb.AppendLine($"  員工 gen_file(CO_ID={kv.Key}): {kv.Value.SuccessCount}/{kv.Value.TotalCount}");
+                sb.AppendLine($"  員工 gen_file(CO_ID={kv.Key}): 新增 {kv.Value.SuccessCount}/{kv.Value.TotalCount}, 跳過(已存在) {kv.Value.SkippedCount}");
             sb.AppendLine();
 
             // 錯誤詳情

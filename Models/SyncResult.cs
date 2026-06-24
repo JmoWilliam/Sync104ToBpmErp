@@ -9,6 +9,7 @@ namespace Sync104ToBpmErp.Models
         public int TotalCount { get; set; }
         public int SuccessCount { get; set; }
         public int FailedCount { get; set; }
+        public int SkippedCount { get; set; }
         public List<string> Errors { get; set; } = new List<string>();
         public DateTime SyncTime { get; set; } = DateTime.Now;
         public string DataType { get; set; } = string.Empty;
