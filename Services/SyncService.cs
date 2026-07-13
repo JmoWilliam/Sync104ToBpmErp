@@ -77,7 +77,11 @@ namespace Sync104ToBpmErp.Services
 
                 // ═══════════════════════════════════════════════
                 // Step 2: 依公司 Loop 執行同步
+                // 每家公司獨立 try/catch：單一公司失敗（例如 104 未授權查詢該公司）
+                // 只記錄錯誤並跳過，不影響其他公司繼續同步
                 // ═══════════════════════════════════════════════
+                report.Success = true;
+
                 foreach (var company in companies)
                 {
                     var coId = company.CompanyId;
@@ -87,17 +91,28 @@ namespace Sync104ToBpmErp.Services
                     _logger.Info($"[公司處理] 開始處理公司 CO_ID={coId}, CO_CODE={coCode}");
                     _logger.Info("============================================");
 
-                    // ─── 2.1 部門層級名稱 (dept_level API → BPM OrganizationUnitLevel) ───
-                    await SyncDeptHierarchyAsync(coId, coCode, report);
+                    try
+                    {
+                        // ─── 2.1 部門層級名稱 (dept_level API → BPM OrganizationUnitLevel) ───
+                        await SyncDeptHierarchyAsync(coId, coCode, report);
 
-                    // ─── 2.2 部門資料 (dept API → BPM OrganizationUnit + ERP gem_file + ERP abd_file) ───
-                    await SyncDepartmentsAsync(startTime, endTime, coId, coCode, report);
+                        // ─── 2.2 部門資料 (dept API → BPM OrganizationUnit + ERP gem_file + ERP abd_file) ───
+                        await SyncDepartmentsAsync(startTime, endTime, coId, coCode, report);
 
-                    // ─── 2.3 員工資料 (emp API → BPM Users+Employee + ERP gen_file) ───
-                    await SyncEmployeesAsync(startTime, endTime, coId, report);
+                        // ─── 2.3 員工資料 (emp API → BPM Users+Employee + ERP gen_file) ───
+                        await SyncEmployeesAsync(startTime, endTime, coId, report);
+                    }
+                    catch (Exception ex)
+                    {
+                        report.Success = false;
+                        report.ErrorMessage = string.IsNullOrEmpty(report.ErrorMessage)
+                            ? $"CO_ID={coId} (CO_CODE={coCode}): {ex.Message}"
+                            : $"{report.ErrorMessage} | CO_ID={coId} (CO_CODE={coCode}): {ex.Message}";
+
+                        _logger.Error($"[公司處理失敗] CO_ID={coId}, CO_CODE={coCode} 同步時發生錯誤，已跳過此公司並繼續處理下一家", ex);
+                        continue;
+                    }
                 }
-
-                report.Success = true;
             }
             catch (Exception ex)
             {

@@ -271,6 +271,11 @@ namespace Sync104ToBpmErp.Services
                             // 新插入的部門加入對照表，供後續子部門查詢 superUnitOID
                             orgUnitOidMap[dept.DeptCode] = oid;
                             _logger.LogSyncDetail("OrganizationUnit", "INSERT", dept.DeptCode, true);
+                            _logger.LogSyncRecord("OrganizationUnit",
+                                $"OID={oid}, id={dept.DeptCode}, organizationUnitName={dept.DeptName}, " +
+                                $"managerOID={managerOID ?? "NULL"}, superUnitOID={superUnitOID ?? "NULL"}, " +
+                                $"levelOID={levelOID ?? "NULL"}, organizationOID={organizationOID ?? "NULL"}, " +
+                                $"objectVersion=1, organizationUnitType=1, validType={(dept.IsAct == 1 ? 1 : 0)}");
                             result.SuccessCount++;
                         }
 
@@ -381,6 +386,9 @@ namespace Sync104ToBpmErp.Services
                                 transaction);
 
                             _logger.LogSyncDetail("OrganizationUnitLevel", "INSERT", item.LevelName, true);
+                            _logger.LogSyncRecord("OrganizationUnitLevel",
+                                $"OID={oid}, objectVersion=1, levelValue={levelValue}, " +
+                                $"organizationUnitLevelName={item.LevelName}, organizationOID={organizationOID ?? "NULL"}");
                             result.SuccessCount++;
                         }
 
@@ -501,6 +509,10 @@ namespace Sync104ToBpmErp.Services
 
                             userInserted = true;
                             _logger.LogSyncDetail("Users", "INSERT", emp.EmpNo, true);
+                            _logger.LogSyncRecord("Users",
+                                $"OID={userOID}, id={emp.EmpNo}, userName={emp.EmpName}, objectVersion=1, " +
+                                $"mailAddress={emp.Email ?? "NULL"}, phoneNumber={emp.Phone ?? "NULL"}, " +
+                                $"leaveDate={emp.QuitDate?.ToString("yyyy-MM-dd") ?? "NULL"}");
                         }
 
                         // ═══════════════════════════════════
@@ -572,6 +584,9 @@ namespace Sync104ToBpmErp.Services
 
                             empInserted = true;
                             _logger.LogSyncDetail("Employee", "INSERT", emp.EmpNo, true);
+                            _logger.LogSyncRecord("Employee",
+                                $"OID={empOID}, employeeId={emp.EmpNo}, organizationOID={organizationOID ?? "NULL"}, " +
+                                $"userOID={userOID}, objectVersion=1, validTo={emp.QuitDate?.ToString("yyyy-MM-dd") ?? "NULL"}");
                         }
 
                         // 此筆員工只要 Users 或 Employee 任一筆有新增即視為成功新增；兩者皆已存在則視為跳過

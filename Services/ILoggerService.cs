@@ -14,5 +14,6 @@ namespace Sync104ToBpmErp.Services
         void LogSyncEnd(string dataType, int total, int success, int failed);
         void LogDbConnection(string dbName, bool success, string? errorMessage = null);
         void LogSyncDetail(string dataType, string action, string key, bool success, string? errorMessage = null);
+        void LogSyncRecord(string tableName, string recordData);
     }
 }

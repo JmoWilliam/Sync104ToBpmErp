@@ -126,6 +126,15 @@ namespace Sync104ToBpmErp.Services
             }
         }
 
+        /// <summary>
+        /// 記錄成功寫入資料庫的完整資料內容，供事後比對資料庫用
+        /// 格式: tableName--&gt;Record data，一律以 Information 層級寫入 SyncLog 檔案
+        /// </summary>
+        public void LogSyncRecord(string tableName, string recordData)
+        {
+            _logger.Information($"{tableName}-->{recordData}");
+        }
+
         public void LogSyncDetail(string dataType, string action, string key, bool success, string? errorMessage = null)
         {
             if (success)

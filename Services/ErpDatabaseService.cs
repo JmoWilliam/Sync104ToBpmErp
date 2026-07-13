@@ -159,6 +159,9 @@ namespace Sync104ToBpmErp.Services
                                 transaction);
 
                             _logger.LogSyncDetail("gem_file", "INSERT", dept.DeptCode, true);
+                            _logger.LogSyncRecord("gem_file",
+                                $"GEM01={dept.DeptCode}, GEM02={dept.DeptName}, GEM03={dept.DeptAbbr ?? dept.DeptName}, " +
+                                $"GEMACTI={(dept.IsAct == 1 ? "Y" : "N")}, GEMUSER=SYNC104, GEMMODU=SYNC104, GEMORIU=SYNC104");
                             result.SuccessCount++;
                         }
 
@@ -272,6 +275,7 @@ namespace Sync104ToBpmErp.Services
                                 transaction);
 
                             _logger.LogSyncDetail("abd_file", "INSERT", $"{abd01}-{abd02}", true);
+                            _logger.LogSyncRecord("abd_file", $"ABD01={abd01}, ABD02={abd02}, ABDACTI=Y, ABDUSER=SYNC104");
                             result.SuccessCount++;
                         }
                         else
@@ -431,6 +435,9 @@ namespace Sync104ToBpmErp.Services
                                 transaction);
 
                             _logger.LogSyncDetail("gen_file", "INSERT", emp.EmpNo, true);
+                            _logger.LogSyncRecord("gen_file",
+                                $"GEN01={emp.EmpNo}, GEN02={emp.EmpName}, GENACTI={(emp.WorkStatus == 3 ? "N" : "Y")}, " +
+                                $"GENUSER=SYNC104, GENMODU=SYNC104");
                             result.SuccessCount++;
                         }
 
