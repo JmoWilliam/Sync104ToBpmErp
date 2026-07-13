@@ -86,6 +86,7 @@ namespace Sync104ToBpmErp.Models
         public string? DeptRelation { get; set; }
 
         [JsonPropertyName("DEPT_START_DATE")]
+        [JsonConverter(typeof(FlexibleNullableDateTimeConverter))]
         public DateTime? DeptStartDate { get; set; }
 
         [JsonPropertyName("E_EMP_ID")]

@@ -35,6 +35,7 @@ namespace Sync104ToBpmErp.Models
         public int? Gender { get; set; }
 
         [JsonPropertyName("BIRTHDAY")]
+        [JsonConverter(typeof(FlexibleNullableDateTimeConverter))]
         public DateTime? Birthday { get; set; }
 
         [JsonPropertyName("IDC_NO")]
@@ -157,9 +158,11 @@ namespace Sync104ToBpmErp.Models
         // ─── 到職/離職 ───
 
         [JsonPropertyName("HIRE_DATE")]
+        [JsonConverter(typeof(FlexibleNullableDateTimeConverter))]
         public DateTime? HireDate { get; set; }
 
         [JsonPropertyName("QUIT_DATE")]
+        [JsonConverter(typeof(FlexibleNullableDateTimeConverter))]
         public DateTime? QuitDate { get; set; }
 
         [JsonPropertyName("WORK_STATUS")]
