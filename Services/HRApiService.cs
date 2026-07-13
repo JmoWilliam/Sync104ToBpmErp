@@ -63,7 +63,7 @@ namespace Sync104ToBpmErp.Services
                     "application/json");
 
                 var response = await _httpClient.PostAsync(_settings.AuthEndpoint, content);
-                response.EnsureSuccessStatusCode();
+                EnsureApiSuccess(response, "登入取得 Access Token");
 
                 var tokenResponse = await response.Content.ReadFromJsonAsync<ApiTokenResponse>();
 
@@ -86,6 +86,23 @@ namespace Sync104ToBpmErp.Services
                 _logger.Error("[HR API] 取得 Access Token 失敗", ex);
                 throw;
             }
+        }
+
+        /// <summary>
+        /// 檢查 API 回應狀態碼；490 為 104 自訂的「帳號無此公司/此 API 存取權限」錯誤，
+        /// 拋出 HrApiPermissionDeniedException 讓呼叫端可以印出清楚訊息並直接跳過，
+        /// 不再視為一般連線/格式錯誤印出完整例外堆疊。
+        /// </summary>
+        private static void EnsureApiSuccess(HttpResponseMessage response, string apiName, long? coId = null)
+        {
+            if ((int)response.StatusCode == 490)
+            {
+                var coText = coId.HasValue ? $"CO_ID={coId}" : "此帳號";
+                throw new HrApiPermissionDeniedException(
+                    $"[HR API] 沒有權限 — {apiName} 拒絕存取（{coText}），請確認 104 HR Max 後台此 API 帳號的可存取公司/API 權限設定");
+            }
+
+            response.EnsureSuccessStatusCode();
         }
 
         /// <summary>
@@ -120,7 +137,7 @@ namespace Sync104ToBpmErp.Services
                     "application/json");
 
                 var response = await _httpClient.PostAsync(_settings.CompanyEndpoint, content);
-                response.EnsureSuccessStatusCode();
+                EnsureApiSuccess(response, "公司清單 API");
 
                 var jsonString = await response.Content.ReadAsStringAsync();
                 _logger.Info($"[HR API] 公司 API 回應: {jsonString.Substring(0, Math.Min(200, jsonString.Length))}...");
@@ -190,7 +207,7 @@ namespace Sync104ToBpmErp.Services
                 _logger.Info($"[HR API] 查詢時間範圍: {startTime:yyyy-MM-dd HH:mm:ss} ~ {endTime:yyyy-MM-dd HH:mm:ss}");
 
                 var response = await _httpClient.PostAsync(_settings.EmployeeEndpoint, content);
-                response.EnsureSuccessStatusCode();
+                EnsureApiSuccess(response, "員工資料 API", coId);
 
                 // 先讀取原始 JSON 內容
                 var jsonString = await response.Content.ReadAsStringAsync();
@@ -264,7 +281,7 @@ namespace Sync104ToBpmErp.Services
                 _logger.Info($"[HR API] 查詢時間範圍: {startTime:yyyy-MM-dd HH:mm:ss} ~ {endTime:yyyy-MM-dd HH:mm:ss}");
 
                 var response = await _httpClient.PostAsync(_settings.DepartmentEndpoint, content);
-                response.EnsureSuccessStatusCode();
+                EnsureApiSuccess(response, "部門資料 API", coId);
 
                 // 先讀取原始 JSON 內容
                 var jsonString = await response.Content.ReadAsStringAsync();
@@ -330,7 +347,7 @@ namespace Sync104ToBpmErp.Services
                     "application/json");
 
                 var response = await _httpClient.PostAsync(_settings.HierarchyEndpoint, content);
-                response.EnsureSuccessStatusCode();
+                EnsureApiSuccess(response, "部門層級資料 API", coId);
 
                 // 先讀取原始 JSON 內容
                 var jsonString = await response.Content.ReadAsStringAsync();

@@ -102,6 +102,17 @@ namespace Sync104ToBpmErp.Services
                         // ─── 2.3 員工資料 (emp API → BPM Users+Employee + ERP gen_file) ───
                         await SyncEmployeesAsync(startTime, endTime, coId, report);
                     }
+                    catch (HrApiPermissionDeniedException ex)
+                    {
+                        // 沒有權限：直接顯示清楚訊息，不印出完整例外堆疊，也不再嘗試此公司後續的同步步驟
+                        report.Success = false;
+                        report.ErrorMessage = string.IsNullOrEmpty(report.ErrorMessage)
+                            ? $"CO_ID={coId} (CO_CODE={coCode}): 沒有權限"
+                            : $"{report.ErrorMessage} | CO_ID={coId} (CO_CODE={coCode}): 沒有權限";
+
+                        _logger.Warning($"[公司處理] CO_ID={coId}, CO_CODE={coCode} 沒有權限，跳過此公司 — {ex.Message}");
+                        continue;
+                    }
                     catch (Exception ex)
                     {
                         report.Success = false;
@@ -199,6 +210,11 @@ namespace Sync104ToBpmErp.Services
                     $"ERP gem: {erpResult.SuccessCount}/{erpResult.TotalCount}, " +
                     $"ERP abd: {abdResult.SuccessCount}/{abdResult.TotalCount}");
             }
+            catch (HrApiPermissionDeniedException)
+            {
+                // 交由外層 (RunFullSyncAsync 公司迴圈) 統一印出「沒有權限」訊息並跳過，這裡不重複記錄完整堆疊
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger.Error($"[同步錯誤] 同步部門資料時發生錯誤 (CO_ID={coId})", ex);
@@ -233,6 +249,10 @@ namespace Sync104ToBpmErp.Services
 
                 _logger.Info($"[同步完成] 部門層級名稱同步完成 (CO_ID={coId}) - " +
                     $"BPM: {bpmResult.SuccessCount}/{bpmResult.TotalCount}");
+            }
+            catch (HrApiPermissionDeniedException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -274,6 +294,10 @@ namespace Sync104ToBpmErp.Services
                 _logger.Info($"[同步完成] 員工資料同步完成 (CO_ID={coId}) - " +
                     $"BPM: {bpmResult.SuccessCount}/{bpmResult.TotalCount}, " +
                     $"ERP: {erpResult.SuccessCount}/{erpResult.TotalCount}");
+            }
+            catch (HrApiPermissionDeniedException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
