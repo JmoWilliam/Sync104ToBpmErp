@@ -106,6 +106,9 @@ namespace Sync104ToBpmErp.Services
                         else
                         {
                             // ── Insert ──
+                            // 注意: 客戶實際的 YCS.GEM_FILE 沒有 GEM11/GEMORIG/GEMORIU 欄位
+                            // (原 mapping doc 對這三欄的假設是錯的，比照 ABD_FILE 的 ORA-00904 一併修正)
+                            // GEM10 之後直接是客製欄位 TA_GEM001~007，目前無對應資料來源，故不寫入
                             await connection.ExecuteAsync(@"
                                 INSERT INTO YCS.GEM_FILE (
                                     GEM01, GEM02, GEM03,
@@ -121,11 +124,7 @@ namespace Sync104ToBpmErp.Services
                                     --待確認 GEM09 管理類別 (1=成本中心 2=利潤中心)
                                     GEM09,
                                     --待確認 GEM10 對應成本中心
-                                    GEM10,
-                                    GEM11,
-                                    --待確認 GEMORIG 資料建立部門
-                                    GEMORIG,
-                                    GEMORIU
+                                    GEM10
                                 ) VALUES (
                                     :GEM01, :GEM02, :GEM03,
                                     --待確認 GEM04
@@ -140,11 +139,7 @@ namespace Sync104ToBpmErp.Services
                                     --待確認 GEM09
                                     NULL,
                                     --待確認 GEM10
-                                    NULL,
-                                    NULL,
-                                    --待確認 GEMORIG
-                                    NULL,
-                                    :GEMORIU
+                                    NULL
                                 )",
                                 new
                                 {
@@ -153,15 +148,14 @@ namespace Sync104ToBpmErp.Services
                                     GEM03 = dept.DeptAbbr ?? dept.DeptName ?? "",
                                     GEMACTI = dept.IsAct == 1 ? "Y" : "N",
                                     GEMUSER = "SYNC104",
-                                    GEMMODU = "SYNC104",
-                                    GEMORIU = "SYNC104"
+                                    GEMMODU = "SYNC104"
                                 },
                                 transaction);
 
                             _logger.LogSyncDetail("gem_file", "INSERT", dept.DeptCode, true);
                             _logger.LogSyncRecord("gem_file",
                                 $"GEM01={dept.DeptCode}, GEM02={dept.DeptName}, GEM03={dept.DeptAbbr ?? dept.DeptName}, " +
-                                $"GEMACTI={(dept.IsAct == 1 ? "Y" : "N")}, GEMUSER=SYNC104, GEMMODU=SYNC104, GEMORIU=SYNC104");
+                                $"GEMACTI={(dept.IsAct == 1 ? "Y" : "N")}, GEMUSER=SYNC104, GEMMODU=SYNC104");
                             result.SuccessCount++;
                         }
 
@@ -241,6 +235,9 @@ namespace Sync104ToBpmErp.Services
                         if (!exists)
                         {
                             // ── Insert ──
+                            // 注意: 客戶實際的 YCS.ABD_FILE 只有 ABD01/02/03/04/05/06、ABDACTI、
+                            // ABDUSER、ABDGRUP、ABDMODU、ABDDATE 這些欄位，沒有 ABDORIG/ABDORIU
+                            // (原 mapping doc 對這兩欄的假設是錯的，實測 ORA-00904 已證實)
                             await connection.ExecuteAsync(@"
                                 INSERT INTO YCS.ABD_FILE (
                                     ABD01, ABD02,
@@ -248,20 +245,14 @@ namespace Sync104ToBpmErp.Services
                                     ABDACTI, ABDUSER,
                                     --待確認 ABDGRUP
                                     ABDGRUP,
-                                    ABDMODU, ABDDATE,
-                                    --待確認 ABDORIG
-                                    ABDORIG,
-                                    ABDORIU
+                                    ABDMODU, ABDDATE
                                 ) VALUES (
                                     :ABD01, :ABD02,
                                     NULL, NULL, NULL, NULL,
                                     :ABDACTI, :ABDUSER,
                                     --待確認 ABDGRUP
                                     NULL,
-                                    :ABDMODU, SYSDATE,
-                                    --待確認 ABDORIG
-                                    NULL,
-                                    :ABDORIU
+                                    :ABDMODU, SYSDATE
                                 )",
                                 new
                                 {
@@ -269,8 +260,7 @@ namespace Sync104ToBpmErp.Services
                                     ABD02 = abd02,
                                     ABDACTI = "Y",
                                     ABDUSER = "SYNC104",
-                                    ABDMODU = "SYNC104",
-                                    ABDORIU = "SYNC104"
+                                    ABDMODU = "SYNC104"
                                 },
                                 transaction);
 

@@ -96,15 +96,29 @@ if ($FrameworkDependent) {
 
 Write-Host "  dotnet $($publishArgs -join ' ')"
 
-$publishResult = & dotnet $publishArgs 2>&1
+# NOTE: Do not pipe the native dotnet command through 2>&1. Under
+# $ErrorActionPreference = "Stop", any single line dotnet writes to stderr
+# (e.g. an ordinary NuGet warning, not necessarily a real failure) gets
+# wrapped into a terminating error and aborts the script before
+# $LASTEXITCODE is even checked, hiding the actual error text.
+# Let dotnet write straight to the console and just check $LASTEXITCODE after.
+& dotnet $publishArgs
 if ($LASTEXITCODE -ne 0) {
-    Write-Fail "Publish failed!"
-    Write-Host $publishResult
+    Write-Fail "Publish failed! (exit code $LASTEXITCODE)"
     exit 1
 }
 Write-OK "Publish succeeded"
 
+# File visibility can lag briefly after dotnet reports exit code 0
+# (common with real-time antivirus scanning or network drives), so poll
+# a bit before declaring failure.
 $exePath = Join-Path $PublishDir "${ProjectName}.exe"
+$waited = 0
+while (-not (Test-Path $exePath) -and $waited -lt 5000) {
+    Start-Sleep -Milliseconds 250
+    $waited += 250
+}
+
 if (-not (Test-Path $exePath)) {
     Write-Fail "Publish completed but ${ProjectName}.exe not found"
     exit 1
