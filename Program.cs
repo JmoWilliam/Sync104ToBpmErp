@@ -67,16 +67,18 @@ namespace Sync104ToBpmErp
 
                         case "--sync":
                         case "-s":
-                            // 檢查是否有時間參數
                             if (args.Length >= 3)
                             {
+                                // 有帶時間參數，使用指定的開始/截止時間
                                 await RunSyncWithArgsAsync(appSettings, logger, args);
                             }
                             else
                             {
-                                Console.WriteLine("錯誤: 同步模式需要提供開始時間和截止時間");
-                                Console.WriteLine("使用方式: Sync104ToBpmErp.exe --sync \"2024-01-01 00:00:00\" \"2024-12-31 23:59:59\"");
-                                Console.WriteLine("互動模式: 直接執行 Sync104ToBpmErp.exe（不帶任何參數）");
+                                // 未帶時間參數: 預設查詢範圍為「系統日期往前一個月」到「系統日期」
+                                var defaultEndTime = DateTime.Now;
+                                var defaultStartTime = defaultEndTime.AddMonths(-1);
+                                Console.WriteLine($"未提供時間參數，使用預設查詢範圍: {defaultStartTime:yyyy-MM-dd HH:mm:ss} ~ {defaultEndTime:yyyy-MM-dd HH:mm:ss}");
+                                await ExecuteSyncAsync(appSettings, logger, defaultStartTime, defaultEndTime);
                             }
                             return;
 
@@ -130,13 +132,16 @@ namespace Sync104ToBpmErp
             Console.WriteLine("  --help, -h, /?      顯示此說明");
             Console.WriteLine("  --test-connection, -t  測試資料庫連線");
             Console.WriteLine("  --test-api, -a      測試 HR API (不連資料庫)");
-            Console.WriteLine("  --sync, -s          執行資料同步 (需要時間參數)");
+            Console.WriteLine("  --sync, -s          執行資料同步 (時間參數可省略)");
             Console.WriteLine();
             Console.WriteLine("同步模式:");
-            Console.WriteLine("  方式 1 - 命令列參數:");
+            Console.WriteLine("  方式 1 - 命令列參數 (指定時間範圍):");
             Console.WriteLine("    Sync104ToBpmErp.exe --sync \"2024-01-01 00:00:00\" \"2024-12-31 23:59:59\"");
             Console.WriteLine();
-            Console.WriteLine("  方式 2 - 互動式輸入:");
+            Console.WriteLine("  方式 2 - 命令列參數 (不帶時間，預設查詢「系統日期往前一個月」到「系統日期」):");
+            Console.WriteLine("    Sync104ToBpmErp.exe --sync");
+            Console.WriteLine();
+            Console.WriteLine("  方式 3 - 互動式輸入:");
             Console.WriteLine("    Sync104ToBpmErp.exe");
             Console.WriteLine("    (程式會提示輸入開始時間和截止時間)");
             Console.WriteLine();

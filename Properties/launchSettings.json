@@ -2,7 +2,7 @@
   "profiles": {
     "Sync104ToBpmErp": {
       "commandName": "Project",
-      "commandLineArgs": "--sync \"2026-01-01 00:00:00\" \"2026-12-31 23:59:59\""
+      "commandLineArgs": "--sync"
     }
   }
 }
