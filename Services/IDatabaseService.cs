@@ -40,6 +40,12 @@ namespace Sync104ToBpmErp.Services
         /// </summary>
         Task<SyncResult> SyncEmployeesAsync(List<Employee> employees, long coId);
 
+        /// <summary>
+        /// BPM: 查詢每位員工所屬部門 (OrganizationUnit.managerOID) 對應的主管員工編號，
+        /// 供 ERP gen_file.TA_GEN07 使用。Key=EMP_NO，查無主管時不會出現在回傳字典中。
+        /// </summary>
+        Task<Dictionary<string, string>> GetEmployeeManagerEmpNosAsync(List<Employee> employees);
+
         // ─── ERP ───
 
         /// <summary>
@@ -59,7 +65,8 @@ namespace Sync104ToBpmErp.Services
 
         /// <summary>
         /// ERP: 同步員工資料到 gen_file
+        /// managerEmpNoMap: EMP_NO -> 直屬主管工號 (來自 BPM GetEmployeeManagerEmpNosAsync)
         /// </summary>
-        Task<SyncResult> SyncGenFileAsync(List<Employee> employees);
+        Task<SyncResult> SyncGenFileAsync(List<Employee> employees, Dictionary<string, string>? managerEmpNoMap = null);
     }
 }

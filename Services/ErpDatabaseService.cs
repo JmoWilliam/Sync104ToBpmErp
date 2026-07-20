@@ -80,34 +80,41 @@ namespace Sync104ToBpmErp.Services
 
                         if (exists)
                         {
-                            // ── 資料已存在，先跳過 (未來可能補 UPDATE) ──
-                            // await connection.ExecuteAsync(@"
-                            //     UPDATE YCS.GEM_FILE SET
-                            //         GEM02   = :GEM02,
-                            //         GEM03   = :GEM03,
-                            //         GEMACTI = :GEMACTI,
-                            //         GEMMODU = :GEMMODU,
-                            //         GEMDATE = SYSDATE
-                            //         --待確認 GEM04, GEM05, GEM07, GEM09, GEM10, GEMGRUP, GEMORIG
-                            //     WHERE GEM01 = :GEM01",
-                            //     new
-                            //     {
-                            //         GEM01 = dept.DeptCode,
-                            //         GEM02 = dept.DeptName ?? "",
-                            //         GEM03 = dept.DeptAbbr ?? dept.DeptName ?? "",
-                            //         GEMACTI = dept.IsAct == 1 ? "Y" : "N",
-                            //         GEMMODU = "SYNC104"
-                            //     },
-                            //     transaction);
+                            // ── 資料已存在 — UPDATE (2026-07-16 依客戶回覆 DataMappingUserConfirm20260716.xlsx 啟用)
+                            //    僅更新客戶確認需要異動的欄位: GEM02, GEM03, GEMACTI, GEM09 (固定寫 3)
+                            //    GEM04/05/06/07/08/GEMGRUP/GEM10 客戶未勾選需要更新，維持原值不動 ──
+                            await connection.ExecuteAsync(@"
+                                UPDATE YCS.GEM_FILE SET
+                                    GEM02   = :GEM02,
+                                    GEM03   = :GEM03,
+                                    GEMACTI = :GEMACTI,
+                                    GEM09   = :GEM09,
+                                    GEMMODU = :GEMMODU,
+                                    GEMDATE = SYSDATE
+                                WHERE GEM01 = :GEM01",
+                                new
+                                {
+                                    GEM01 = dept.DeptCode,
+                                    GEM02 = dept.DeptName ?? "",
+                                    GEM03 = dept.DeptAbbr ?? dept.DeptName ?? "",
+                                    GEMACTI = dept.IsAct == 1 ? "Y" : "N",
+                                    GEM09 = "3",
+                                    GEMMODU = "SYNC104"
+                                },
+                                transaction);
 
-                            result.SkippedCount++;
-                            _logger.LogSyncDetail("gem_file", "SKIP(已存在)", dept.DeptCode, true);
+                            result.SuccessCount++;
+                            _logger.LogSyncDetail("gem_file", "UPDATE", dept.DeptCode, true);
+                            _logger.LogSyncRecord("gem_file",
+                                $"GEM01={dept.DeptCode}, GEM02={dept.DeptName}, GEM03={dept.DeptAbbr ?? dept.DeptName}, " +
+                                $"GEMACTI={(dept.IsAct == 1 ? "Y" : "N")}, GEM09=3, GEMMODU=SYNC104 (UPDATE)");
                         }
                         else
                         {
                             // ── Insert ──
                             // 注意: 客戶實際的 YCS.GEM_FILE 沒有 GEM11/GEMORIG/GEMORIU 欄位
                             // (原 mapping doc 對這三欄的假設是錯的，比照 ABD_FILE 的 ORA-00904 一併修正)
+                            // GEM09 管理類別: 2026-07-16 依客戶回覆固定寫 '3' (其它)，因目前無資料來源可判斷 1=成本中心/2=利潤中心
                             // GEM10 之後直接是客製欄位 TA_GEM001~007，目前無對應資料來源，故不寫入
                             await connection.ExecuteAsync(@"
                                 INSERT INTO YCS.GEM_FILE (
@@ -121,7 +128,6 @@ namespace Sync104ToBpmErp.Services
                                     --待確認 GEMGRUP
                                     GEMGRUP,
                                     GEMMODU, GEMDATE,
-                                    --待確認 GEM09 管理類別 (1=成本中心 2=利潤中心)
                                     GEM09,
                                     --待確認 GEM10 對應成本中心
                                     GEM10
@@ -136,8 +142,7 @@ namespace Sync104ToBpmErp.Services
                                     --待確認 GEMGRUP
                                     NULL,
                                     :GEMMODU, SYSDATE,
-                                    --待確認 GEM09
-                                    NULL,
+                                    :GEM09,
                                     --待確認 GEM10
                                     NULL
                                 )",
@@ -148,14 +153,15 @@ namespace Sync104ToBpmErp.Services
                                     GEM03 = dept.DeptAbbr ?? dept.DeptName ?? "",
                                     GEMACTI = dept.IsAct == 1 ? "Y" : "N",
                                     GEMUSER = "SYNC104",
-                                    GEMMODU = "SYNC104"
+                                    GEMMODU = "SYNC104",
+                                    GEM09 = "3"
                                 },
                                 transaction);
 
                             _logger.LogSyncDetail("gem_file", "INSERT", dept.DeptCode, true);
                             _logger.LogSyncRecord("gem_file",
                                 $"GEM01={dept.DeptCode}, GEM02={dept.DeptName}, GEM03={dept.DeptAbbr ?? dept.DeptName}, " +
-                                $"GEMACTI={(dept.IsAct == 1 ? "Y" : "N")}, GEMUSER=SYNC104, GEMMODU=SYNC104");
+                                $"GEMACTI={(dept.IsAct == 1 ? "Y" : "N")}, GEM09=3, GEMUSER=SYNC104, GEMMODU=SYNC104");
                             result.SuccessCount++;
                         }
 
@@ -270,24 +276,25 @@ namespace Sync104ToBpmErp.Services
                         }
                         else
                         {
-                            // ── 資料已存在，先跳過 (未來可能補 UPDATE 確保有效碼) ──
-                            // await connection.ExecuteAsync(@"
-                            //     UPDATE YCS.ABD_FILE SET
-                            //         ABDACTI = :ABDACTI,
-                            //         ABDMODU = :ABDMODU,
-                            //         ABDDATE = SYSDATE
-                            //     WHERE ABD01 = :ABD01 AND ABD02 = :ABD02",
-                            //     new
-                            //     {
-                            //         ABD01 = abd01,
-                            //         ABD02 = abd02,
-                            //         ABDACTI = "Y",
-                            //         ABDMODU = "SYNC104"
-                            //     },
-                            //     transaction);
+                            // ── 資料已存在 — UPDATE (2026-07-16 依客戶回覆啟用，確保有效碼與異動時間同步更新) ──
+                            await connection.ExecuteAsync(@"
+                                UPDATE YCS.ABD_FILE SET
+                                    ABDACTI = :ABDACTI,
+                                    ABDMODU = :ABDMODU,
+                                    ABDDATE = SYSDATE
+                                WHERE ABD01 = :ABD01 AND ABD02 = :ABD02",
+                                new
+                                {
+                                    ABD01 = abd01,
+                                    ABD02 = abd02,
+                                    ABDACTI = "Y",
+                                    ABDMODU = "SYNC104"
+                                },
+                                transaction);
 
-                            result.SkippedCount++;
-                            _logger.LogSyncDetail("abd_file", "SKIP(已存在)", $"{abd01}-{abd02}", true);
+                            result.SuccessCount++;
+                            _logger.LogSyncDetail("abd_file", "UPDATE", $"{abd01}-{abd02}", true);
+                            _logger.LogSyncRecord("abd_file", $"ABD01={abd01}, ABD02={abd02}, ABDACTI=Y, ABDMODU=SYNC104 (UPDATE)");
                         }
 
                         if (processedCount % 100 == 0)
@@ -327,10 +334,12 @@ namespace Sync104ToBpmErp.Services
 
         #region gen_file（員工）
 
-        public async Task<SyncResult> SyncGenFileAsync(List<Employee> employees)
+        public async Task<SyncResult> SyncGenFileAsync(List<Employee> employees, Dictionary<string, string>? managerEmpNoMap = null)
         {
             var result = new SyncResult { DataType = "gen_file", TargetSystem = "ERP" };
             if (employees == null || employees.Count == 0) return result;
+
+            managerEmpNoMap ??= new Dictionary<string, string>();
 
             using var connection = CreateConnection();
             connection.Open();
@@ -346,6 +355,21 @@ namespace Sync104ToBpmErp.Services
                     processedCount++;
                     try
                     {
+                        // 2026-07-16 依客戶回覆 (DataMappingUserConfirm20260716.xlsx):
+                        //   GEN03 = 部門代號 (DEPT1_CODE)
+                        //   GEN04 = 職稱，暫不實作 (2026-07-18 客戶回覆先不做 Functions 職務比對)，維持 NULL
+                        //   GEN05 = 分機 (OFFICE_TEL_EXT)，沒有就空白
+                        //   GEN06 = Email (OFFICE_EMAIL)，客戶要求「一定要有」，缺漏時記錄 Warning
+                        //   TA_GEN07 = 直屬主管工號 (依部門 OrganizationUnit.managerOID 查詢，見 GetEmployeeManagerEmpNosAsync)
+                        //   TA_GEN08 = 員工銀行帳號，客戶要求「必須要有」，但 104 員工 API 目前的資料模型 (Models/Employee.cs)
+                        //              完全沒有銀行帳號欄位，需先跟客戶/104 確認資料來源，此處暫不寫入，並記錄 Warning 提醒
+                        var managerEmpNo = managerEmpNoMap.TryGetValue(emp.EmpNo, out var mgr) ? mgr : null;
+
+                        if (string.IsNullOrWhiteSpace(emp.Email))
+                            _logger.Warning($"[ERP] 員工 {emp.EmpNo} ({emp.EmpName}) 無 Email (OFFICE_EMAIL)，GEN06 將為空值，客戶要求此欄位必須要有");
+
+                        _logger.Warning($"[ERP] 員工 {emp.EmpNo} ({emp.EmpName}) TA_GEN08 銀行帳號目前無資料來源，尚未寫入，待客戶/104 確認欄位對應");
+
                         // UPSERT: 以 GEN01 = EMP_NO 判斷
                         var exists = await connection.ExecuteScalarAsync<int>(
                             "SELECT COUNT(1) FROM YCS.GEN_FILE WHERE GEN01 = :GEN01",
@@ -354,28 +378,37 @@ namespace Sync104ToBpmErp.Services
 
                         if (exists)
                         {
-                            // ── 資料已存在，先跳過 (未來可能補 UPDATE) ──
-                            // await connection.ExecuteAsync(@"
-                            //     UPDATE YCS.GEN_FILE SET
-                            //         GEN02   = :GEN02,
-                            //         --待確認 GEN03 部門代號
-                            //         --待確認 GEN04 職稱
-                            //         --待確認 GEN05, GEN06
-                            //         GENACTI = :GENACTI,
-                            //         GENMODU = :GENMODU,
-                            //         GENDATE = SYSDATE
-                            //     WHERE GEN01 = :GEN01",
-                            //     new
-                            //     {
-                            //         GEN01 = emp.EmpNo,
-                            //         GEN02 = emp.EmpName ?? "",
-                            //         GENACTI = emp.WorkStatus == 3 ? "N" : "Y",
-                            //         GENMODU = "SYNC104"
-                            //     },
-                            //     transaction);
+                            // ── 資料已存在 — UPDATE (2026-07-16 依客戶回覆啟用)
+                            //    僅更新客戶確認需要異動的欄位: GEN02, GEN03, GEN06, GENACTI
+                            //    GEN05 一併更新以保持與 INSERT 邏輯一致；GEN04(職稱)暫不實作；TA_GEN07/TA_GEN08 客戶回覆未列入異動範圍，維持原值不動 ──
+                            await connection.ExecuteAsync(@"
+                                UPDATE YCS.GEN_FILE SET
+                                    GEN02   = :GEN02,
+                                    GEN03   = :GEN03,
+                                    GEN05   = :GEN05,
+                                    GEN06   = :GEN06,
+                                    GENACTI = :GENACTI,
+                                    GENMODU = :GENMODU,
+                                    GENDATE = SYSDATE
+                                WHERE GEN01 = :GEN01",
+                                new
+                                {
+                                    GEN01 = emp.EmpNo,
+                                    GEN02 = emp.EmpName ?? "",
+                                    GEN03 = (object?)emp.Dept1Code ?? DBNull.Value,
+                                    GEN05 = (object?)emp.PhoneExt ?? DBNull.Value,
+                                    GEN06 = (object?)emp.Email ?? DBNull.Value,
+                                    GENACTI = emp.WorkStatus == 3 ? "N" : "Y",
+                                    GENMODU = "SYNC104"
+                                },
+                                transaction);
 
-                            result.SkippedCount++;
-                            _logger.LogSyncDetail("gen_file", "SKIP(已存在)", emp.EmpNo, true);
+                            result.SuccessCount++;
+                            _logger.LogSyncDetail("gen_file", "UPDATE", emp.EmpNo, true);
+                            _logger.LogSyncRecord("gen_file",
+                                $"GEN01={emp.EmpNo}, GEN02={emp.EmpName}, GEN03={emp.Dept1Code ?? "NULL"}, " +
+                                $"GEN05={emp.PhoneExt ?? "NULL"}, GEN06={emp.Email ?? "NULL"}, " +
+                                $"GENACTI={(emp.WorkStatus == 3 ? "N" : "Y")}, GENMODU=SYNC104 (UPDATE)");
                         }
                         else
                         {
@@ -383,51 +416,50 @@ namespace Sync104ToBpmErp.Services
                             await connection.ExecuteAsync(@"
                                 INSERT INTO YCS.GEN_FILE (
                                     GEN01, GEN02,
-                                    --待確認 GEN03 部門代號
                                     GEN03,
-                                    --待確認 GEN04 職稱
+                                    --待確認 GEN04 職稱 (暫不實作)
                                     GEN04,
-                                    --待確認 GEN05
-                                    GEN05,
-                                    --待確認 GEN06
-                                    GEN06,
+                                    GEN05, GEN06,
                                     GENACTI, GENUSER,
                                     --待確認 GENGRUP
                                     GENGRUP,
                                     GENMODU, GENDATE,
-                                    --待確認 TA_GEN07, TA_GEN08
-                                    TA_GEN07, TA_GEN08
+                                    TA_GEN07,
+                                    --待確認 TA_GEN08 (銀行帳號，尚無資料來源)
+                                    TA_GEN08
                                 ) VALUES (
                                     :GEN01, :GEN02,
-                                    --待確認 GEN03
-                                    NULL,
+                                    :GEN03,
                                     --待確認 GEN04
                                     NULL,
-                                    --待確認 GEN05
-                                    NULL,
-                                    --待確認 GEN06
-                                    NULL,
+                                    :GEN05, :GEN06,
                                     :GENACTI, :GENUSER,
                                     --待確認 GENGRUP
                                     NULL,
                                     :GENMODU, SYSDATE,
-                                    --待確認 TA_GEN07, TA_GEN08
-                                    NULL, NULL
+                                    :TA_GEN07,
+                                    --待確認 TA_GEN08
+                                    NULL
                                 )",
                                 new
                                 {
                                     GEN01 = emp.EmpNo,
                                     GEN02 = emp.EmpName ?? "",
+                                    GEN03 = (object?)emp.Dept1Code ?? DBNull.Value,
+                                    GEN05 = (object?)emp.PhoneExt ?? DBNull.Value,
+                                    GEN06 = (object?)emp.Email ?? DBNull.Value,
                                     GENACTI = emp.WorkStatus == 3 ? "N" : "Y",
                                     GENUSER = "SYNC104",
-                                    GENMODU = "SYNC104"
+                                    GENMODU = "SYNC104",
+                                    TA_GEN07 = (object?)managerEmpNo ?? DBNull.Value
                                 },
                                 transaction);
 
                             _logger.LogSyncDetail("gen_file", "INSERT", emp.EmpNo, true);
                             _logger.LogSyncRecord("gen_file",
-                                $"GEN01={emp.EmpNo}, GEN02={emp.EmpName}, GENACTI={(emp.WorkStatus == 3 ? "N" : "Y")}, " +
-                                $"GENUSER=SYNC104, GENMODU=SYNC104");
+                                $"GEN01={emp.EmpNo}, GEN02={emp.EmpName}, GEN03={emp.Dept1Code ?? "NULL"}, " +
+                                $"GEN05={emp.PhoneExt ?? "NULL"}, GEN06={emp.Email ?? "NULL"}, " +
+                                $"GENACTI={(emp.WorkStatus == 3 ? "N" : "Y")}, GENUSER=SYNC104, GENMODU=SYNC104, TA_GEN07={managerEmpNo ?? "NULL"}");
                             result.SuccessCount++;
                         }
 
@@ -472,6 +504,9 @@ namespace Sync104ToBpmErp.Services
 
         public Task<SyncResult> SyncEmployeesAsync(List<Employee> employees, long coId)
             => Task.FromResult(new SyncResult { DataType = "Employee", TargetSystem = "ERP(跳過)" });
+
+        public Task<Dictionary<string, string>> GetEmployeeManagerEmpNosAsync(List<Employee> employees)
+            => Task.FromResult(new Dictionary<string, string>());
 
         #endregion
     }

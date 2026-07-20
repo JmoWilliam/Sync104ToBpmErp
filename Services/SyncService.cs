@@ -286,9 +286,14 @@ namespace Sync104ToBpmErp.Services
                 var bpmResult = await _bpmDatabaseService.SyncEmployeesAsync(employees, coId);
                 report.SetBpmEmployeeResult(coId, bpmResult);
 
+                // 查詢直屬主管工號 (BPM OrganizationUnit.managerOID)，
+                // 需在 BPM Employee 資料已同步完成後才查得到 organizationOID，故安排在此處執行
+                _logger.Info("[同步處理] 正在查詢員工直屬主管工號 (BPM)...");
+                var managerEmpNoMap = await _bpmDatabaseService.GetEmployeeManagerEmpNosAsync(employees);
+
                 // 同步到 ERP gen_file
                 _logger.Info("[同步處理] 正在同步到 ERP (gen_file)...");
-                var erpResult = await _erpDatabaseService.SyncGenFileAsync(employees);
+                var erpResult = await _erpDatabaseService.SyncGenFileAsync(employees, managerEmpNoMap);
                 report.SetErpEmployeeResult(coId, erpResult);
 
                 _logger.Info($"[同步完成] 員工資料同步完成 (CO_ID={coId}) - " +
