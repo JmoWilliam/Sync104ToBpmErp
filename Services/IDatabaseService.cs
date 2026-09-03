@@ -46,6 +46,12 @@ namespace Sync104ToBpmErp.Services
         /// </summary>
         Task<Dictionary<string, string>> GetEmployeeManagerEmpNosAsync(List<Employee> employees);
 
+        /// <summary>
+        /// BPM: 同步員工職稱/簽核歸屬到 Functions 表 (需在 Users+Employee+OrganizationUnit 都同步完成後執行)。
+        /// FunctionDefinition / FunctionLevel 由 BPM 端既有資料維護，本方法僅查詢比對，不自動新增。
+        /// </summary>
+        Task<SyncResult> SyncEmployeeFunctionsAsync(List<Employee> employees, long coId);
+
         // ─── ERP ───
 
         /// <summary>

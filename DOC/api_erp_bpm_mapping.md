@@ -62,11 +62,26 @@ BPM      | Organization         | objectVersion         | 物件版本號       
 Database | Table Name           | ColumnName            | Description           | Source
 BPM      | Employee             | OID                   | PK, 呼叫亂數取號32碼   | (程式產生 UUID)
 BPM      | Employee             | employeeId            | 員工編號               | /api/ed/emp.EMP_NO
-BPM      | Employee             | organizationOID       | 所屬部門 OID (FK→OrganizationUnit) | /api/ed/emp.DEPT1_CODE → OrganizationUnit.OID
+BPM      | Employee             | organizationOID       | 所屬公司 OID (FK→Organization) ⚠️2026-09-03修正，原寫部門OID與既有系統資料不符 | /api/ed/emp.CO_CODE → Organization.OID
 BPM      | Employee             | userOID               | 對應使用者 OID (FK→Users) | /api/ed/emp.EMP_NO → Users.OID
 BPM      | Employee             | objectVersion         | 物件版本號             | (遞增)
 BPM      | Employee             | validTo               | 有效期限               | /api/ed/emp.QUIT_DATE (離職日=失效日)
 ```
+
+### BPM: Functions (組織單元職務 — 職稱/簽核歸屬，2026-09-03 新增)
+```
+Database | Table Name           | ColumnName            | Description           | Source
+BPM      | Functions            | OID                   | PK, 呼叫亂數取號32碼   | (程式產生 UUID)
+BPM      | Functions            | objectVersion         | 物件版本號             | (遞增)
+BPM      | Functions            | occupantOID           | 擔任此職務的人員 OID (FK→Users，非Employee) | /api/ed/emp.EMP_NO → Users.OID
+BPM      | Functions            | organizationUnitOID   | 所屬組織單元 OID (FK→OrganizationUnit) | /api/ed/emp.Dept1Code → OrganizationUnit.OID
+BPM      | Functions            | definitionOID         | 職務定義 OID (FK→FunctionDefinition) | /api/ed/emp.JobName → FunctionDefinition.functionDefinitionName（僅查詢，不新增）
+BPM      | Functions            | approvalLevelOID      | 核決層級 OID (FK→FunctionLevel) | 查 FunctionLevel.functionLevelName='defaultLevel'（僅查詢，不新增）
+BPM      | Functions            | specifiedManagerOID   | 指定主管 OID (FK→Users，非Employee) | 沿用 OrganizationUnit.managerOID
+BPM      | Functions            | isMain                | 是否為主要部門         | 固定值 1
+```
+> **UPSERT 判斷鍵**: `occupantOID` + `organizationUnitOID`。
+> **不寫入 FunctionDefinition / FunctionLevel** — 由 BPM 管理端維護，本程式僅查詢比對取得 OID。
 
 ### BPM: Users (使用者)
 ```
