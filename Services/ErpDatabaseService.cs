@@ -508,6 +508,9 @@ namespace Sync104ToBpmErp.Services
         public Task<Dictionary<string, string>> GetEmployeeManagerEmpNosAsync(List<Employee> employees)
             => Task.FromResult(new Dictionary<string, string>());
 
+        public Task<SyncResult> SyncEmployeeFunctionsAsync(List<Employee> employees, long coId)
+            => Task.FromResult(new SyncResult { DataType = "Functions", TargetSystem = "ERP(跳過)" });
+
         #endregion
     }
 }

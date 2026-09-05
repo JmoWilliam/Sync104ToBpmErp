@@ -8,9 +8,9 @@ namespace Sync104ToBpmErp.Services
     /// 對照表: api_erp_bpm_mapping.md
     ///
     /// 同步項目:
-    ///   BPM: OrganizationUnit, OrganizationUnitLevel, Users, Employee
+    ///   BPM: OrganizationUnit, OrganizationUnitLevel, Users, Employee, Functions
     ///   ERP: gem_file, abd_file, gen_file
-    /// 不同步: Organization, geu_file (已在管理端建立)
+    /// 不同步: Organization, geu_file, FunctionDefinition, FunctionLevel (已在管理端建立)
     /// </summary>
     public class SyncService
     {
@@ -291,6 +291,11 @@ namespace Sync104ToBpmErp.Services
                 _logger.Info("[同步處理] 正在查詢員工直屬主管工號 (BPM)...");
                 var managerEmpNoMap = await _bpmDatabaseService.GetEmployeeManagerEmpNosAsync(employees);
 
+                // 同步職稱/簽核歸屬到 BPM Functions（需在 Users+Employee 同步完成後執行，才能查到 occupantOID）
+                _logger.Info("[同步處理] 正在同步到 BPM (Functions)...");
+                var functionsResult = await _bpmDatabaseService.SyncEmployeeFunctionsAsync(employees, coId);
+                report.SetBpmFunctionsResult(coId, functionsResult);
+
                 // 同步到 ERP gen_file
                 _logger.Info("[同步處理] 正在同步到 ERP (gen_file)...");
                 var erpResult = await _erpDatabaseService.SyncGenFileAsync(employees, managerEmpNoMap);
@@ -298,6 +303,7 @@ namespace Sync104ToBpmErp.Services
 
                 _logger.Info($"[同步完成] 員工資料同步完成 (CO_ID={coId}) - " +
                     $"BPM: {bpmResult.SuccessCount}/{bpmResult.TotalCount}, " +
+                    $"Functions: {functionsResult.SuccessCount}/{functionsResult.TotalCount} (跳過 {functionsResult.SkippedCount}), " +
                     $"ERP: {erpResult.SuccessCount}/{erpResult.TotalCount}");
             }
             catch (HrApiPermissionDeniedException)
@@ -330,6 +336,7 @@ namespace Sync104ToBpmErp.Services
         public Dictionary<long, SyncResult> BpmDepartmentResults { get; set; } = new();
         public Dictionary<long, SyncResult> BpmHierarchyResults { get; set; } = new();
         public Dictionary<long, SyncResult> BpmEmployeeResults { get; set; } = new();
+        public Dictionary<long, SyncResult> BpmFunctionsResults { get; set; } = new();
 
         // ERP 各表結果（以公司 CO_ID 為 key）
         public Dictionary<long, SyncResult> ErpDepartmentResults { get; set; } = new();
@@ -339,6 +346,7 @@ namespace Sync104ToBpmErp.Services
         public void SetBpmDepartmentResult(long coId, SyncResult r) => BpmDepartmentResults[coId] = r;
         public void SetBpmHierarchyResult(long coId, SyncResult r) => BpmHierarchyResults[coId] = r;
         public void SetBpmEmployeeResult(long coId, SyncResult r) => BpmEmployeeResults[coId] = r;
+        public void SetBpmFunctionsResult(long coId, SyncResult r) => BpmFunctionsResults[coId] = r;
         public void SetErpDepartmentResult(long coId, SyncResult r) => ErpDepartmentResults[coId] = r;
         public void SetErpHierarchyResult(long coId, SyncResult r) => ErpHierarchyResults[coId] = r;
         public void SetErpEmployeeResult(long coId, SyncResult r) => ErpEmployeeResults[coId] = r;
@@ -370,6 +378,8 @@ namespace Sync104ToBpmErp.Services
                 sb.AppendLine($"  層級名 OrganizationUnitLevel(CO_ID={kv.Key}): 新增 {kv.Value.SuccessCount}/{kv.Value.TotalCount}, 跳過(已存在) {kv.Value.SkippedCount}");
             foreach (var kv in BpmEmployeeResults)
                 sb.AppendLine($"  員工 Employee+Users(CO_ID={kv.Key}): 新增 {kv.Value.SuccessCount}/{kv.Value.TotalCount}, 跳過(已存在) {kv.Value.SkippedCount}");
+            foreach (var kv in BpmFunctionsResults)
+                sb.AppendLine($"  職稱/簽核 Functions(CO_ID={kv.Key}): 成功 {kv.Value.SuccessCount}/{kv.Value.TotalCount}, 跳過(缺職稱/部門對應) {kv.Value.SkippedCount}");
             sb.AppendLine();
 
             // ERP 結果
@@ -387,6 +397,7 @@ namespace Sync104ToBpmErp.Services
             foreach (var kv in BpmDepartmentResults) allErrors.AddRange(kv.Value.Errors);
             foreach (var kv in BpmHierarchyResults) allErrors.AddRange(kv.Value.Errors);
             foreach (var kv in BpmEmployeeResults) allErrors.AddRange(kv.Value.Errors);
+            foreach (var kv in BpmFunctionsResults) allErrors.AddRange(kv.Value.Errors);
             foreach (var kv in ErpDepartmentResults) allErrors.AddRange(kv.Value.Errors);
             foreach (var kv in ErpHierarchyResults) allErrors.AddRange(kv.Value.Errors);
             foreach (var kv in ErpEmployeeResults) allErrors.AddRange(kv.Value.Errors);
