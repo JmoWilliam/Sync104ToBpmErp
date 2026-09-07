@@ -492,6 +492,19 @@ namespace Sync104ToBpmErp.Services
                         {
                             // ── Insert Users ──
                             // 2026-07-16 依客戶回覆新增 ldapid = 104 EMP_EN_NAME (英文姓名)
+                            //
+                            // 2026-09-03 對全庫 1722 筆 Users 做欄位分佈健檢後修正以下預設值
+                            // （修正前這幾個欄位的預設值只有我們自己新增的那幾筆是這樣，全庫其餘紀錄一致是另一個值）：
+                            //   identificationType : 'Employee' → 'DEFAULT'（全庫 1710/1710 既有紀錄皆為 DEFAULT，
+                            //                         懷疑 BPM 前端「模擬使用者」查詢頁就是靠這個欄位判斷是否為正常帳號，
+                            //                         導致新同步進去的員工姓名在該頁面顯示空白）
+                            //   enableSubstitute   : 0 → 1（全庫 1709/1722 為 1）
+                            //   performForwardType : 0 → 2（全庫 1707/1722 為 2）
+                            //   passwordWrongTimes : 未寫入(NULL) → 0（全庫 1710/1710 既有紀錄皆為 0，本次新增此欄位）
+                            // currentType / traceWorkStatus 全庫既有資料本身就有兩種以上的值混用，找不到明顯多數，
+                            // 暫不寫入(維持 NULL)，待確認實際用途後再補。
+                            // password 目前仍是明碼預設值，既有帳號的 password 欄位都是加密過的密文，
+                            // 這點需要跟 BPM 管理員/廠商確認密碼要用什麼方式產生，暫不處理。
                             userOID = await GenerateUniqueOIDAsync(connection, transaction,
                                 "Users", "Employee", "OrganizationUnit", "Organization", "OrganizationUnitLevel");
 
@@ -499,19 +512,17 @@ namespace Sync104ToBpmErp.Services
                                 INSERT INTO [Users] (
                                     [OID], [id], [userName], [objectVersion], [password],
                                     [leaveDate], [mailAddress], [localeString], [phoneNumber],
-                                    --待確認 identificationType
                                     [identificationType],
                                     [enableSubstitute], [mailingFrequencyType],
                                     [performForwardType], [userTaskDisplay], [createdTime],
-                                    [ldapid]
+                                    [ldapid], [passwordWrongTimes]
                                 ) VALUES (
                                     @OID, @Id, @UserName, 1, @Password,
                                     @LeaveDate, @MailAddress, 'zh_TW', @Phone,
-                                    --待確認 identificationType
-                                    'Employee',
-                                    0, 0,
-                                    0, 1, SYSDATETIME(),
-                                    @LdapId
+                                    'DEFAULT',
+                                    1, 0,
+                                    2, 1, SYSDATETIME(),
+                                    @LdapId, 0
                                 )",
                                 new
                                 {

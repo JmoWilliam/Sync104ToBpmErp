@@ -46,6 +46,12 @@ namespace Sync104ToBpmErp.Configuration
         /// 新員工匯入 BPM Users 時的預設初始密碼
         /// </summary>
         public string DefaultPassword { get; set; } = "0000";
+        /// <summary>
+        /// 未帶時間參數執行 --sync 時，查詢開始時間往前推算的天數（結束時間固定為系統日期）。
+        /// 未設定 (null) 或設定 0 以下時，維持原本「系統日期往前一個月」的預設行為。
+        /// 例：BeginDays = 300 代表查詢範圍為「系統日期往前 300 天」~「系統日期」。
+        /// </summary>
+        public int? BeginDays { get; set; }
     }
 
     /// <summary>
