@@ -664,32 +664,76 @@ namespace Sync104ToBpmErp.Services
         /// <summary>
         /// 查詢每位員工所屬部門主管 (OrganizationUnit.managerOID) 對應的
         /// 主管員工編號 (Users.id)，供 ERP gen_file.TA_GEN07「直屬主管工號」使用。
-        /// 2026-09-03 修正: 改以 104 Dept1Code 直接查 OrganizationUnit，不再經由 Employee.organizationOID
+        /// 2026-09-03 修正1: 改以 104 Dept1Code 直接查 OrganizationUnit，不再經由 Employee.organizationOID
         /// (該欄位已改回指向 Organization 公司層級，不再是部門)。
+        /// 2026-09-03 修正2: 若員工本身就是所屬部門的主管，直屬主管不該是自己，改沿 superUnitOID
+        /// 往上層部門找「不是自己」的主管。部門表筆數遠小於員工，整表載入記憶體後直接往上走，
+        /// 避免對每位員工各自查一次 DB。
         /// </summary>
         public async Task<Dictionary<string, string>> GetEmployeeManagerEmpNosAsync(List<Employee> employees)
         {
             var managerMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var deptCodes = employees.Select(e => e.Dept1Code).Where(c => !string.IsNullOrEmpty(c)).Distinct().ToList();
-            if (deptCodes.Count == 0) return managerMap;
+            if (employees == null || employees.Count == 0) return managerMap;
 
             using var connection = CreateConnection();
             connection.Open();
 
-            var rows = await connection.QueryAsync<(string DeptCode, string? ManagerEmpNo)>(@"
-                SELECT ou.[id] AS DeptCode, mgrUser.[id] AS ManagerEmpNo
-                FROM [OrganizationUnit] ou
-                LEFT JOIN [Users] mgrUser ON ou.[managerOID] = mgrUser.[OID]
-                WHERE ou.[id] IN @DeptCodes",
-                new { DeptCodes = deptCodes });
+            // 部門表整批載入 (筆數遠小於員工)，方便沿 superUnitOID 往上層找主管
+            var deptRows = await connection.QueryAsync<(string OID, string Id, string? ManagerOID, string? SuperUnitOID)>(
+                "SELECT [OID], [id], [managerOID], [superUnitOID] FROM [OrganizationUnit]");
+            var deptByCode = new Dictionary<string, (string OID, string? ManagerOID, string? SuperUnitOID)>(StringComparer.OrdinalIgnoreCase);
+            var deptByOID = new Dictionary<string, (string? ManagerOID, string? SuperUnitOID)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var d in deptRows)
+            {
+                deptByCode[d.Id] = (d.OID, d.ManagerOID, d.SuperUnitOID);
+                deptByOID[d.OID] = (d.ManagerOID, d.SuperUnitOID);
+            }
 
-            var deptManagerMap = rows
-                .Where(r => !string.IsNullOrEmpty(r.ManagerEmpNo))
-                .ToDictionary(r => r.DeptCode, r => r.ManagerEmpNo!, StringComparer.OrdinalIgnoreCase);
+            // Users.id <-> OID 對照，供 selfOID 比對與最終轉回工號使用
+            var userRows = await connection.QueryAsync<(string OID, string Id)>("SELECT [OID], [id] FROM [Users]");
+            var userOidById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var userIdByOid = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var u in userRows)
+            {
+                userOidById[u.Id] = u.OID;
+                userIdByOid[u.OID] = u.Id;
+            }
+
+            string? ResolveNonSelfManagerOID(string deptCode, string selfUserOID)
+            {
+                if (!deptByCode.TryGetValue(deptCode, out var dept)) return null;
+
+                var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var currentOID = dept.OID;
+                (string? ManagerOID, string? SuperUnitOID) current = (dept.ManagerOID, dept.SuperUnitOID);
+
+                for (int depth = 0; depth < 20 && !string.IsNullOrEmpty(currentOID); depth++)
+                {
+                    if (!visited.Add(currentOID)) break;
+
+                    if (!string.IsNullOrEmpty(current.ManagerOID) &&
+                        !string.Equals(current.ManagerOID, selfUserOID, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return current.ManagerOID;
+                    }
+
+                    if (string.IsNullOrEmpty(current.SuperUnitOID) || !deptByOID.TryGetValue(current.SuperUnitOID, out var parent))
+                        break;
+
+                    currentOID = current.SuperUnitOID;
+                    current = parent;
+                }
+
+                return null;
+            }
 
             foreach (var emp in employees)
             {
-                if (!string.IsNullOrEmpty(emp.Dept1Code) && deptManagerMap.TryGetValue(emp.Dept1Code, out var mgrEmpNo))
+                if (string.IsNullOrEmpty(emp.Dept1Code)) continue;
+                if (!userOidById.TryGetValue(emp.EmpNo, out var selfOID)) continue;
+
+                var mgrOID = ResolveNonSelfManagerOID(emp.Dept1Code, selfOID);
+                if (!string.IsNullOrEmpty(mgrOID) && userIdByOid.TryGetValue(mgrOID, out var mgrEmpNo))
                     managerMap[emp.EmpNo] = mgrEmpNo;
             }
 
@@ -773,7 +817,16 @@ namespace Sync104ToBpmErp.Services
                             continue;
                         }
                         string organizationUnitOID = deptRow.OID;
+
+                        // 直屬主管：若本部門主管就是自己 (自己是部門主管)，改沿 superUnitOID
+                        // 往上層部門找「不是自己」的主管，而不是把自己填成自己的直屬主管
                         string? specifiedManagerOID = deptRow.ManagerOID;
+                        if (!string.IsNullOrEmpty(specifiedManagerOID) &&
+                            string.Equals(specifiedManagerOID, occupantOID, StringComparison.OrdinalIgnoreCase))
+                        {
+                            specifiedManagerOID = await ResolveNonSelfManagerOIDAsync(
+                                connection, transaction, organizationUnitOID, occupantOID);
+                        }
 
                         // 4. definitionOID：104 職稱(JobName) → FunctionDefinition（僅查詢比對，不自動新增）
                         if (string.IsNullOrWhiteSpace(emp.JobName))
@@ -794,14 +847,26 @@ namespace Sync104ToBpmErp.Services
                             continue;
                         }
 
-                        // 5. approvalLevelOID：預設採用 defaultLevel（全庫多數情況），查無則留 NULL
+                        // 5. approvalLevelOID：2026-09-03 修正 — 職稱若剛好對應到主管職核決層級名稱
+                        //    (例如職稱「經理」對到 FunctionLevel「經理」)，直接代入該層級；
+                        //    職稱對不到任何主管層級名稱時 (一般非主管職稱)，才 fallback 用 defaultLevel。
+                        //    (實測全庫資料：經理/課長/處長/副課長等主管職稱多數確實對應同名層級，
+                        //    非主管職稱如工程師/專員/管理師則幾乎全部落在 defaultLevel，符合這個規則)
                         string? approvalLevelOID = await connection.QueryFirstOrDefaultAsync<string>(
-                            "SELECT [OID] FROM [FunctionLevel] WHERE [organizationOID] = @CompanyOID AND [functionLevelName] = 'defaultLevel'",
-                            new { CompanyOID = companyOID },
+                            "SELECT [OID] FROM [FunctionLevel] WHERE [organizationOID] = @CompanyOID AND [functionLevelName] = @JobName",
+                            new { CompanyOID = companyOID, JobName = emp.JobName.Trim() },
                             transaction);
+
                         if (string.IsNullOrEmpty(approvalLevelOID))
                         {
-                            _logger.Warning($"[BPM] Functions {emp.EmpNo}: 找不到 FunctionLevel 'defaultLevel' (CO_CODE={emp.CompanyCode})，approvalLevelOID 將為 NULL");
+                            approvalLevelOID = await connection.QueryFirstOrDefaultAsync<string>(
+                                "SELECT [OID] FROM [FunctionLevel] WHERE [organizationOID] = @CompanyOID AND [functionLevelName] = 'defaultLevel'",
+                                new { CompanyOID = companyOID },
+                                transaction);
+                            if (string.IsNullOrEmpty(approvalLevelOID))
+                            {
+                                _logger.Warning($"[BPM] Functions {emp.EmpNo}: 找不到 FunctionLevel 'defaultLevel' (CO_CODE={emp.CompanyCode})，approvalLevelOID 將為 NULL");
+                            }
                         }
 
                         // 6. UPSERT Functions（比對鍵：occupantOID + organizationUnitOID）
@@ -893,6 +958,40 @@ namespace Sync104ToBpmErp.Services
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// 2026-09-03 新增：沿著 OrganizationUnit.superUnitOID 往上層部門尋找「不是自己」的主管 OID。
+        /// 用途：某員工本身就是所屬部門的主管時，其直屬主管不該是自己，改抓上一階部門的主管。
+        /// 若上層部門也沒有主管，或主管仍是自己，就繼續往上找；一路到頂層都找不到則回傳 null。
+        /// maxDepth 與 visited 集合是為了防呆，避免 superUnitOID 資料異常成環時無窮迴圈。
+        /// </summary>
+        private static async Task<string?> ResolveNonSelfManagerOIDAsync(
+            IDbConnection connection, IDbTransaction transaction,
+            string organizationUnitOID, string selfUserOID, int maxDepth = 20)
+        {
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var currentOID = organizationUnitOID;
+
+            for (int depth = 0; depth < maxDepth && !string.IsNullOrEmpty(currentOID); depth++)
+            {
+                if (!visited.Add(currentOID)) break;
+
+                var row = await connection.QueryFirstOrDefaultAsync<(string? ManagerOID, string? SuperUnitOID)>(
+                    "SELECT [managerOID], [superUnitOID] FROM [OrganizationUnit] WHERE [OID] = @OID",
+                    new { OID = currentOID },
+                    transaction);
+
+                if (!string.IsNullOrEmpty(row.ManagerOID) &&
+                    !string.Equals(row.ManagerOID, selfUserOID, StringComparison.OrdinalIgnoreCase))
+                {
+                    return row.ManagerOID;
+                }
+
+                currentOID = row.SuperUnitOID;
+            }
+
+            return null;
         }
 
         #endregion

@@ -242,8 +242,16 @@ namespace Sync104ToBpmErp.Services
         }
 
         /// <summary>
-        /// 取得所有部門資料 (依時間範圍)
+        /// 取得所有部門資料
         /// 注意：companyId 不再有 fallback，必須由呼叫端提供（從 /api/os/company 取得）
+        ///
+        /// 2026-09-03 修改：原本用 E_SDATETIME/E_EDATETIME 做「異動時間區間」增量查詢，
+        /// 但部門的異動時間戳記不一定會如預期反映每一種欄位變更（例如主管改派），
+        /// 導致部門明明已在 HR 端更新，卻因為不在查詢區間內而被 104 API 濾掉、完全抓不到，
+        /// BPM 的 managerOID 跟衍生的直屬主管欄位因此不會更新。
+        /// 部門數量遠少於員工，改成比照 GetDeptHierarchyAsync() 每次都抓全部，
+        /// 靠既有 UPSERT 邏輯處理，避免漏抓任何異動。startTime/endTime 參數保留簽章相容性，
+        /// 但不再傳給 API。
         /// </summary>
         public async Task<List<Department>> GetDepartmentsAsync(DateTime startTime, DateTime endTime, long? companyId = null)
         {
@@ -256,20 +264,15 @@ namespace Sync104ToBpmErp.Services
 
                 var coId = companyId.Value;
 
-                // 格式化時間參數 (yyyy-MM-dd HH:mm:ss 格式)
-                var startTimeStr = startTime.ToString("yyyy-MM-dd HH:mm:ss");
-                var endTimeStr = endTime.ToString("yyyy-MM-dd HH:mm:ss");
-
                 // 建立 POST 請求內容，符合 104 HR Max API 規格
                 // 參考文件: /api/os/dept 需要 ORG_TYPE_CODE 和 BASE_DATE
+                // (不再帶 E_SDATETIME/E_EDATETIME，每次都抓全部部門，避免漏抓異動)
                 var requestBody = new
                 {
                     ACCESS_TOKEN = _accessToken,
                     CO_ID = coId,
                     ORG_TYPE_CODE = _settings.OrgTypeCode,
-                    BASE_DATE = _settings.BaseDate,
-                    E_SDATETIME = startTimeStr,
-                    E_EDATETIME = endTimeStr
+                    BASE_DATE = _settings.BaseDate
                 };
 
                 var content = new StringContent(
@@ -278,7 +281,7 @@ namespace Sync104ToBpmErp.Services
                     "application/json");
 
                 _logger.Info($"[HR API] 正在呼叫部門資料 API: {_settings.DepartmentEndpoint} (CO_ID={coId})");
-                _logger.Info($"[HR API] 查詢時間範圍: {startTime:yyyy-MM-dd HH:mm:ss} ~ {endTime:yyyy-MM-dd HH:mm:ss}");
+                _logger.Info($"[HR API] 抓取全部部門資料 (不使用時間區間篩選)");
 
                 var response = await _httpClient.PostAsync(_settings.DepartmentEndpoint, content);
                 EnsureApiSuccess(response, "部門資料 API", coId);
