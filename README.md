@@ -154,9 +154,14 @@ Sync104ToBpmErp.exe --help
 "SyncSettings": {
     "BatchSize": 100,
     "LogDirectory": "Logs",
-    "SyncIntervalMinutes": 60
+    "SyncIntervalMinutes": 60,
+    "BeginDays": 300
 }
 ```
+
+- **BeginDays**：執行 `--sync`（或 `-s`）**未帶時間參數**時，查詢開始時間往前推算的天數，結束時間固定為系統日期。例如 `BeginDays: 300` 代表查詢範圍是「系統日期往前 300 天」~「系統日期」。
+  未設定（`null`）或設定 0 以下時，維持原本「系統日期往前一個月」的預設行為。
+  有帶時間參數執行（`--sync "開始時間" "截止時間"`）或互動模式輸入時間時，此設定不生效。
 
 ## Windows 工作排程器設定
 

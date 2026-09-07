@@ -74,10 +74,15 @@ namespace Sync104ToBpmErp
                             }
                             else
                             {
-                                // 未帶時間參數: 預設查詢範圍為「系統日期往前一個月」到「系統日期」
+                                // 未帶時間參數: 結束時間固定為系統日期，開始時間依 appsettings.json 的
+                                // SyncSettings.BeginDays 決定；未設定或 <= 0 時維持「系統日期往前一個月」
                                 var defaultEndTime = DateTime.Now;
-                                var defaultStartTime = defaultEndTime.AddMonths(-1);
-                                Console.WriteLine($"未提供時間參數，使用預設查詢範圍: {defaultStartTime:yyyy-MM-dd HH:mm:ss} ~ {defaultEndTime:yyyy-MM-dd HH:mm:ss}");
+                                var beginDays = appSettings.SyncSettings.BeginDays;
+                                var defaultStartTime = (beginDays.HasValue && beginDays.Value > 0)
+                                    ? defaultEndTime.AddDays(-beginDays.Value)
+                                    : defaultEndTime.AddMonths(-1);
+                                Console.WriteLine($"未提供時間參數，使用預設查詢範圍: {defaultStartTime:yyyy-MM-dd HH:mm:ss} ~ {defaultEndTime:yyyy-MM-dd HH:mm:ss}" +
+                                    (beginDays.HasValue && beginDays.Value > 0 ? $" (BeginDays={beginDays.Value})" : " (BeginDays 未設定，預設往前一個月)"));
                                 await ExecuteSyncAsync(appSettings, logger, defaultStartTime, defaultEndTime);
                             }
                             return;
