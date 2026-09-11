@@ -176,12 +176,21 @@ namespace Sync104ToBpmErp.Services
                     "SELECT [id], [OID] FROM [OrganizationUnit]", transaction: transaction))
                     orgUnitOidMap[(string)row.id] = (string)row.OID;
 
-                var levelOidMap = new Dictionary<(int, string?), string>();
+                // 2026-09-11 修正：原本用 104 DEPT_LEVEL_ID 對照 OrganizationUnitLevel.levelValue，
+                // 但兩者是完全不同的數字空間 (DEPT_LEVEL_ID 是 104 內部的大範圍任意 ID，
+                // levelValue 是各公司自己由 0 開始編的小範圍序號，兩家公司階層數還不一樣)，
+                // 這個比對事實上永遠對不上，導致 levelOID 永遠是 NULL——正式資料庫還原比對後才發現
+                // 這個問題原本就存在，且會把既有正確的 levelOID 覆蓋成 NULL。
+                // 改用「層級名稱」(104 DEPT_LEVEL_NAME ↔ BPM organizationUnitLevelName) 比對，
+                // 名稱才是兩邊真正對得上的欄位。
+                var levelOidMap = new Dictionary<(string, string?), string>();
                 foreach (var row in await connection.QueryAsync(
-                    "SELECT [levelValue], [organizationOID], [OID] FROM [OrganizationUnitLevel]",
+                    "SELECT [organizationUnitLevelName], [organizationOID], [OID] FROM [OrganizationUnitLevel]",
                     transaction: transaction))
                 {
-                    levelOidMap[((int)row.levelValue, (string?)row.organizationOID)] = (string)row.OID;
+                    string? levelName = ((string?)row.organizationUnitLevelName)?.Trim();
+                    if (string.IsNullOrEmpty(levelName)) continue;
+                    levelOidMap[(levelName, (string?)row.organizationOID)] = (string)row.OID;
                 }
 
                 // ── 拓撲排序：確保父部門排在子部門前 ──
@@ -216,8 +225,8 @@ namespace Sync104ToBpmErp.Services
                             orgUnitOidMap.TryGetValue(dept.ParentDeptCode, out superUnitOID);
 
                         string? levelOID = null;
-                        if (dept.DeptLevelId.HasValue)
-                            levelOidMap.TryGetValue(((int)dept.DeptLevelId.Value, organizationOID), out levelOID);
+                        if (!string.IsNullOrEmpty(dept.DeptLevelName))
+                            levelOidMap.TryGetValue((dept.DeptLevelName.Trim(), organizationOID), out levelOID);
 
                         if (!string.IsNullOrEmpty(existingOid))
                         {
@@ -587,10 +596,15 @@ namespace Sync104ToBpmErp.Services
 
                         // ═══════════════════════════════════
                         // 3. Employee（員工歸屬）— UPSERT
+                        // 2026-09-11 修正：原本只用 employeeId 查詢比對鍵，但 organizationOID 改成
+                        // 公司層級後，同一個人可能合法擁有「多筆」Employee (一家公司一筆，例如集團
+                        // 董事長橫跨多家子公司)，只用 employeeId 查詢在這種情況下會隨機比對到某一筆
+                        // (不一定是這次要處理的公司)，導致重複新增或誤改到別家公司的記錄。
+                        // 改成 employeeId + organizationOID 一起當比對鍵，才能正確對應「這個人在這家公司」的那一筆。
                         // ═══════════════════════════════════
                         var empOID = await connection.QueryFirstOrDefaultAsync<string>(
-                            "SELECT [OID] FROM [Employee] WHERE [employeeId] = @EmpNo",
-                            new { EmpNo = emp.EmpNo },
+                            "SELECT [OID] FROM [Employee] WHERE [employeeId] = @EmpNo AND [organizationOID] = @OrganizationOID",
+                            new { EmpNo = emp.EmpNo, OrganizationOID = (object?)organizationOID ?? DBNull.Value },
                             transaction);
 
                         bool empInserted = false;

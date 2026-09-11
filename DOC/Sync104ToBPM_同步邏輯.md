@@ -43,7 +43,7 @@ for each company（依 CO_ID 逐一處理）：
 | `organizationUnitName` | 104 `DEPT_NAME`，**去除開頭的部門代碼前綴**（104 常把代碼帶在名稱裡，如「A0450業務行政部」→ 只存「業務行政部」）|
 | `managerOID` | 104 `LEADER_EMP_NO` → 查 `Users.OID` |
 | `superUnitOID` | 104 `PARENT_DEPT_CODE` → 查 `OrganizationUnit.OID` |
-| `levelOID` | 104 `DEPT_LEVEL_ID/NAME` → 查 `OrganizationUnitLevel.OID` |
+| `levelOID` | 104 `DEPT_LEVEL_NAME` → 依名稱查 `OrganizationUnitLevel.OID`（同公司內比對）|
 | `organizationOID` | 104 `CO_ID` → 查 `Organization.OID` |
 | `organizationUnitType` | 固定值 1 |
 | `validType` | 104 `IS_ACT`（1=啟用／0=停用） |
@@ -51,6 +51,12 @@ for each company（依 CO_ID 逐一處理）：
 
 UPSERT 判斷鍵：`id`（DEPT_CODE）
 寫入前先做拓樸排序，確保父部門一定比子部門先寫入。
+
+> **2026-09-11 修正**：`levelOID` 原本用 104 `DEPT_LEVEL_ID`（104 內部任意大範圍 ID）去比對
+> `OrganizationUnitLevel.levelValue`（各公司自己由 0 起編的小範圍序號，且各公司階層數不同），
+> 兩者是完全不同的數字空間，比對永遠對不上，導致 `levelOID` 一律寫成 `NULL`——用正式資料庫還原比對
+> 才發現這個問題，而且會把既有正確的 `levelOID` 覆蓋掉。已改用**層級名稱**比對
+> （104 `DEPT_LEVEL_NAME` ↔ BPM `organizationUnitLevelName`，限定同一公司），名稱才是兩邊真正對得上的欄位。
 
 ---
 
@@ -85,8 +91,14 @@ UPSERT 判斷鍵：`id`（EMP_NO）
 | `validTo` | 104 `QUIT_DATE` |
 | `objectVersion` | 新增1／更新+1 |
 
-UPSERT 判斷鍵：`employeeId`（EMP_NO）
+UPSERT 判斷鍵：`employeeId`（EMP_NO）**+ `organizationOID`**（公司）
 更新時只改 `organizationOID`／`validTo`；`userOID` 維持原值不覆蓋。
+
+> **2026-09-11 修正**：判斷鍵原本只有 `employeeId`，但 `organizationOID` 改成公司層級後，
+> 同一個人可能合法橫跨多家公司各有一筆 `Employee`（例如集團董事長身兼多家子公司高階主管）。
+> 只用 `employeeId` 查詢，在這種情況下會隨機比對到某一筆既有記錄（不一定是這次要處理的公司），
+> 導致重複新增或誤改到別家公司的記錄——用正式資料庫還原比對，實測發現至少 3 人受影響
+> （其中一人多出 1 筆重複記錄）。已改成 `employeeId` + `organizationOID` 一起當比對鍵。
 
 ---
 
