@@ -12,13 +12,13 @@ namespace Sync104ToBpmErp.Services
     ///
     /// 寫入的 Table:
     ///   - OrganizationUnit      : 部門 (INSERT/UPDATE)
-    ///   - OrganizationUnitLevel : 部門層級名稱 (INSERT/UPDATE)
     ///   - Users                 : 系統使用者 (INSERT/UPDATE)
     ///   - Employee              : 員工歸屬 (INSERT/UPDATE)
     ///   - Functions             : 職稱/簽核歸屬 (INSERT/UPDATE，2026-09-03 新增)
     ///
     /// 不寫入的 Table (已在 BPM 管理端建立，只查詢比對):
     ///   - Organization          : 公司
+    ///   - OrganizationUnitLevel : 部門層級名稱 (2026-09-07 起停用寫入，客戶反映不該被程式修改)
     ///   - FunctionDefinition    : 職務定義 (職稱清單)
     ///   - FunctionLevel         : 職務核決層級定義
     /// </summary>
@@ -198,6 +198,15 @@ namespace Sync104ToBpmErp.Services
                         // ── 查詢關聯 OID（全部用記憶體對照表，無額外 DB 查詢） ──
                         orgUnitOidMap.TryGetValue(dept.DeptCode, out var existingOid);
 
+                        // 2026-09-09 修正：104 DEPT_NAME 常常會把部門代碼帶在名稱開頭
+                        // (例如 "A0450業務行政部")，寫進 BPM 前先去掉這個前綴，只留「業務行政部」。
+                        string orgUnitName = dept.DeptName ?? "";
+                        if (!string.IsNullOrEmpty(dept.DeptCode) &&
+                            orgUnitName.StartsWith(dept.DeptCode, StringComparison.OrdinalIgnoreCase))
+                        {
+                            orgUnitName = orgUnitName.Substring(dept.DeptCode.Length);
+                        }
+
                         string? managerOID = null;
                         if (!string.IsNullOrEmpty(dept.LeaderEmpNo))
                             userOidMap.TryGetValue(dept.LeaderEmpNo, out managerOID);
@@ -227,7 +236,7 @@ namespace Sync104ToBpmErp.Services
                                 new
                                 {
                                     OID = existingOid,
-                                    OrgUnitName = dept.DeptName ?? "",
+                                    OrgUnitName = orgUnitName,
                                     ManagerOID = (object?)managerOID ?? DBNull.Value,
                                     SuperUnitOID = (object?)superUnitOID ?? DBNull.Value,
                                     LevelOID = (object?)levelOID ?? DBNull.Value,
@@ -238,7 +247,7 @@ namespace Sync104ToBpmErp.Services
                             result.SuccessCount++;
                             _logger.LogSyncDetail("OrganizationUnit", "UPDATE", dept.DeptCode, true);
                             _logger.LogSyncRecord("OrganizationUnit",
-                                $"OID={existingOid}, id={dept.DeptCode}, organizationUnitName={dept.DeptName}, " +
+                                $"OID={existingOid}, id={dept.DeptCode}, organizationUnitName={orgUnitName}, " +
                                 $"managerOID={managerOID ?? "NULL"}, superUnitOID={superUnitOID ?? "NULL"}, " +
                                 $"levelOID={levelOID ?? "NULL"}, validType={(dept.IsAct == 1 ? 1 : 0)} (UPDATE)");
                         }
@@ -264,7 +273,7 @@ namespace Sync104ToBpmErp.Services
                                 {
                                     OID = oid,
                                     Id = dept.DeptCode,
-                                    OrgUnitName = dept.DeptName ?? "",
+                                    OrgUnitName = orgUnitName,
                                     ManagerOID = (object?)managerOID ?? DBNull.Value,
                                     SuperUnitOID = (object?)superUnitOID ?? DBNull.Value,
                                     LevelOID = (object?)levelOID ?? DBNull.Value,
@@ -277,7 +286,7 @@ namespace Sync104ToBpmErp.Services
                             orgUnitOidMap[dept.DeptCode] = oid;
                             _logger.LogSyncDetail("OrganizationUnit", "INSERT", dept.DeptCode, true);
                             _logger.LogSyncRecord("OrganizationUnit",
-                                $"OID={oid}, id={dept.DeptCode}, organizationUnitName={dept.DeptName}, " +
+                                $"OID={oid}, id={dept.DeptCode}, organizationUnitName={orgUnitName}, " +
                                 $"managerOID={managerOID ?? "NULL"}, superUnitOID={superUnitOID ?? "NULL"}, " +
                                 $"levelOID={levelOID ?? "NULL"}, organizationOID={organizationOID ?? "NULL"}, " +
                                 $"objectVersion=1, organizationUnitType=1, validType={(dept.IsAct == 1 ? 1 : 0)}");
@@ -314,7 +323,23 @@ namespace Sync104ToBpmErp.Services
 
         #region OrganizationUnitLevel（部門層級名稱）
 
-        public async Task<SyncResult> SyncOrganizationUnitLevelsAsync(List<DeptHierarchy> hierarchy, long coId, string coCode)
+        /// <summary>
+        /// 2026-09-07 停用：客戶反映 OrganizationUnitLevel 這張表的資料不該被我們的程式修改
+        /// (部門層級名稱/核決層級定義屬於 BPM 管理端維護的基礎設定)。
+        /// 原本每次同步都會對既有資料做 UPDATE (即使值沒變也會 objectVersion+1)，
+        /// 導致這幾筆固定的層級資料版本號被無意義地一直往上累加 (實測其中一筆被同步跑到 objectVersion=58)。
+        /// 改為完全不寫入，只保留查詢比對用途；OrganizationUnit.levelOID 的對照表
+        /// (SyncOrganizationUnitsAsync 裡的 levelOidMap) 仍直接查詢這張表既有資料，不受影響。
+        /// 原本的 UPSERT 邏輯整段註解保留在下方，之後如果要恢復可以直接取消註解。
+        /// </summary>
+        public Task<SyncResult> SyncOrganizationUnitLevelsAsync(List<DeptHierarchy> hierarchy, long coId, string coCode)
+        {
+            _logger.Info("[BPM] OrganizationUnitLevel 不寫入 (2026-09-07 起改為僅查詢比對，資料由 BPM 管理端維護)，跳過");
+            return Task.FromResult(new SyncResult { DataType = "OrganizationUnitLevel", TargetSystem = "BPM(跳過)" });
+        }
+
+        /*
+        public async Task<SyncResult> SyncOrganizationUnitLevelsAsync_Disabled(List<DeptHierarchy> hierarchy, long coId, string coCode)
         {
             var result = new SyncResult { DataType = "OrganizationUnitLevel", TargetSystem = "BPM" };
             if (hierarchy == null || hierarchy.Count == 0) return result;
@@ -427,6 +452,7 @@ namespace Sync104ToBpmErp.Services
 
             return result;
         }
+        */
 
         #endregion
 
@@ -731,8 +757,19 @@ namespace Sync104ToBpmErp.Services
             {
                 if (string.IsNullOrEmpty(emp.Dept1Code)) continue;
                 if (!userOidById.TryGetValue(emp.EmpNo, out var selfOID)) continue;
+                if (!deptByCode.TryGetValue(emp.Dept1Code, out var dept)) continue;
 
-                var mgrOID = ResolveNonSelfManagerOID(emp.Dept1Code, selfOID);
+                var mgrOID = dept.ManagerOID;
+                if (!string.IsNullOrEmpty(mgrOID) && string.Equals(mgrOID, selfOID, StringComparison.OrdinalIgnoreCase))
+                {
+                    // 自己是部門主管，往上層部門找不是自己的主管；
+                    // 2026-09-09 修正：一路找到組織最頂層都找不到 (例如董事長，上面已經沒有部門)，
+                    // 維持自己是自己的直屬主管，不要留空——這也是 BPM 既有資料在頂層的慣例寫法，
+                    // 留空反而是異常值。
+                    var resolved = ResolveNonSelfManagerOID(emp.Dept1Code, selfOID);
+                    mgrOID = !string.IsNullOrEmpty(resolved) ? resolved : selfOID;
+                }
+
                 if (!string.IsNullOrEmpty(mgrOID) && userIdByOid.TryGetValue(mgrOID, out var mgrEmpNo))
                     managerMap[emp.EmpNo] = mgrEmpNo;
             }
@@ -819,13 +856,17 @@ namespace Sync104ToBpmErp.Services
                         string organizationUnitOID = deptRow.OID;
 
                         // 直屬主管：若本部門主管就是自己 (自己是部門主管)，改沿 superUnitOID
-                        // 往上層部門找「不是自己」的主管，而不是把自己填成自己的直屬主管
+                        // 往上層部門找「不是自己」的主管，而不是把自己填成自己的直屬主管。
+                        // 2026-09-09 修正：一路找到組織最頂層都找不到 (例如董事長，上面已經沒有部門)，
+                        // 維持自己是自己的直屬主管，不要留空——這也是 BPM 既有資料在頂層的慣例寫法，
+                        // 留空反而是異常值。
                         string? specifiedManagerOID = deptRow.ManagerOID;
                         if (!string.IsNullOrEmpty(specifiedManagerOID) &&
                             string.Equals(specifiedManagerOID, occupantOID, StringComparison.OrdinalIgnoreCase))
                         {
-                            specifiedManagerOID = await ResolveNonSelfManagerOIDAsync(
+                            var resolvedManagerOID = await ResolveNonSelfManagerOIDAsync(
                                 connection, transaction, organizationUnitOID, occupantOID);
+                            specifiedManagerOID = !string.IsNullOrEmpty(resolvedManagerOID) ? resolvedManagerOID : occupantOID;
                         }
 
                         // 4. definitionOID：104 職稱(JobName) → FunctionDefinition（僅查詢比對，不自動新增）
@@ -954,6 +995,241 @@ namespace Sync104ToBpmErp.Services
                 transaction.Rollback();
                 result.Success = false;
                 _logger.Error($"[{GetDatabaseName()}] 同步 Functions 資料時發生錯誤，已回滾", ex);
+                throw;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 2026-09-09 新增：同步部門「兼職主管」到 Functions 表 (isMain=0)。
+        /// 情境：104 部門的 LEADER_EMP_NO 不一定等於該主管自己的 DEPT1_CODE
+        /// (例如黃嘉偉本業掛在 A0440，卻同時是 A0443 的部門主管)——SyncEmployeeFunctionsAsync
+        /// 只會處理主管自己 DEPT1_CODE 對應的那筆 Functions (isMain=1)，不會建立/更新兼職部門這筆，
+        /// 導致兼職那筆資料一直停留在建立當下的舊值 (實測發現過 objectVersion=1、主管欄位是好幾個組織
+        /// 改組前的舊人選)。
+        /// 職稱(definitionOID)/核決層級(approvalLevelOID) 沿用該主管自己「本職」(isMain=1) 的 Functions
+        /// 記錄，因為 104 部門資料本身沒有回傳職稱可用；查不到本職記錄 (代表這位主管還沒被同步過)
+        /// 就跳過，等下次他自己被同步到後再補。
+        ///
+        /// 2026-09-09 補強：**跨公司**掛名主管 (例如集團董事長何瑞祥被指定管理 YCS Germany GmbH
+        /// 的 I0100董事長室，但 104 從未把他登記成這家公司的員工) 除了 Functions 缺記錄外，
+        /// 還會缺一筆「主管在該部門所屬公司底下的 Employee 記錄」。實測證實 BPM 展開部門時，
+        /// 會對這個部門底下每個 Functions 佔用者執行
+        /// `SELECT ... FROM Users, Employee WHERE Users.OID=@occupant AND Employee.userOID=Users.OID
+        ///  AND Employee.organizationOID=@該部門所屬公司OID`，
+        /// 查無資料(0筆)會導致 BPM 後端接口調用失敗、整個部門展開不了。
+        /// 客戶已確認正式環境「分公司可以掛不隸屬該公司的人當部門主管」是合法情境，
+        /// 所以主動幫他在該公司底下補一筆 Employee 記錄 (即使 104 沒有把他列為該公司員工)，
+        /// 讓 BPM 查得到資料，不會再是空結果。
+        /// 需在 SyncEmployeeFunctionsAsync 之後執行。
+        /// </summary>
+        public async Task<SyncResult> SyncConcurrentDeptHeadFunctionsAsync(List<Department> departments, long coId, string coCode)
+        {
+            var result = new SyncResult { DataType = "Functions(兼職主管)", TargetSystem = "BPM" };
+            if (departments == null || departments.Count == 0) return result;
+
+            using var connection = CreateConnection();
+            connection.Open();
+            using var transaction = connection.BeginTransaction();
+
+            try
+            {
+                string? companyOID = await GetOrganizationOIDAsync(connection, transaction, coCode);
+                if (string.IsNullOrEmpty(companyOID))
+                {
+                    _logger.Warning($"[BPM] Functions(兼職主管) 找不到 Organization (CO_CODE={coCode})，跳過");
+                    transaction.Commit();
+                    return result;
+                }
+
+                var deptsWithLeader = departments.Where(d => !string.IsNullOrEmpty(d.LeaderEmpNo)).ToList();
+                result.TotalCount = deptsWithLeader.Count;
+                int processedCount = 0;
+
+                foreach (var dept in deptsWithLeader)
+                {
+                    processedCount++;
+                    try
+                    {
+                        // 1. 部門本身的 OID
+                        string? organizationUnitOID = await connection.QueryFirstOrDefaultAsync<string>(
+                            "SELECT [OID] FROM [OrganizationUnit] WHERE [id] = @DeptCode",
+                            new { DeptCode = dept.DeptCode },
+                            transaction);
+                        if (string.IsNullOrEmpty(organizationUnitOID))
+                        {
+                            result.SkippedCount++;
+                            continue;
+                        }
+
+                        // 2. 主管的 Users.OID
+                        string? leaderUserOID = await connection.QueryFirstOrDefaultAsync<string>(
+                            "SELECT [OID] FROM [Users] WHERE [id] = @LeaderEmpNo",
+                            new { dept.LeaderEmpNo },
+                            transaction);
+                        if (string.IsNullOrEmpty(leaderUserOID))
+                        {
+                            result.SkippedCount++;
+                            _logger.Warning($"[BPM] Functions(兼職主管) 略過 部門{dept.DeptCode}主管{dept.LeaderEmpNo}: 找不到對應 Users 記錄");
+                            continue;
+                        }
+
+                        // 2.5 確保主管在「這個部門所屬公司」底下有 Employee 記錄（跨公司掛名主管專用補強）
+                        //     104 可能沒把他登記成這家公司的員工，但正式環境允許跨公司掛名主管，
+                        //     BPM 展開部門時會查這筆 Employee，查無資料就會展開失敗，所以主動補上。
+                        int hasEmployeeForThisCompany = await connection.ExecuteScalarAsync<int>(
+                            "SELECT COUNT(1) FROM [Employee] WHERE [userOID] = @UserOID AND [organizationOID] = @CompanyOID",
+                            new { UserOID = leaderUserOID, CompanyOID = companyOID },
+                            transaction);
+
+                        if (hasEmployeeForThisCompany == 0)
+                        {
+                            var newEmpOID = await GenerateUniqueOIDAsync(connection, transaction,
+                                "Employee", "Users", "OrganizationUnit", "Organization",
+                                "OrganizationUnitLevel", "FunctionDefinition", "FunctionLevel", "Functions");
+
+                            await connection.ExecuteAsync(@"
+                                INSERT INTO [Employee] (
+                                    [OID], [employeeId], [organizationOID], [userOID], [objectVersion], [validTo]
+                                ) VALUES (
+                                    @OID, @EmployeeId, @OrganizationOID, @UserOID, 1, NULL
+                                )",
+                                new
+                                {
+                                    OID = newEmpOID,
+                                    EmployeeId = dept.LeaderEmpNo,
+                                    OrganizationOID = companyOID,
+                                    UserOID = leaderUserOID
+                                },
+                                transaction);
+
+                            _logger.LogSyncDetail("Employee(跨公司掛名主管)", "INSERT", dept.LeaderEmpNo!, true);
+                            _logger.LogSyncRecord("Employee",
+                                $"OID={newEmpOID} (跨公司掛名主管補建), employeeId={dept.LeaderEmpNo}, " +
+                                $"organizationOID={companyOID} ({coCode}), userOID={leaderUserOID}, objectVersion=1");
+                        }
+
+                        // 3. 已經是本職 (isMain=1 且部門相同) 就不算兼職，交給主同步邏輯處理，這裡跳過避免重複
+                        int alreadyMainHere = await connection.ExecuteScalarAsync<int>(
+                            "SELECT COUNT(1) FROM [Functions] WHERE [occupantOID] = @OccupantOID AND [organizationUnitOID] = @OrgUnitOID AND [isMain] = 1",
+                            new { OccupantOID = leaderUserOID, OrgUnitOID = organizationUnitOID },
+                            transaction);
+                        if (alreadyMainHere > 0)
+                        {
+                            continue;
+                        }
+
+                        // 4. 沿用主管自己「本職」(isMain=1) 的職稱/核決層級；查不到代表他還沒被同步過，先跳過
+                        var mainFunction = await connection.QueryFirstOrDefaultAsync<(string? DefinitionOID, string? ApprovalLevelOID)>(
+                            "SELECT TOP 1 [definitionOID], [approvalLevelOID] FROM [Functions] WHERE [occupantOID] = @OccupantOID AND [isMain] = 1",
+                            new { OccupantOID = leaderUserOID },
+                            transaction);
+                        if (string.IsNullOrEmpty(mainFunction.DefinitionOID))
+                        {
+                            result.SkippedCount++;
+                            _logger.Warning($"[BPM] Functions(兼職主管) 略過 部門{dept.DeptCode}主管{dept.LeaderEmpNo}: 查不到主管本職的職稱，無法決定兼職記錄的 definitionOID (該主管可能尚未被同步過)");
+                            continue;
+                        }
+
+                        // 5. 直屬主管：兼職部門本身的 managerOID (理論上就是他自己)；若一路往上找不到不是自己的主管，維持自己
+                        var deptManagerRow = await connection.QueryFirstOrDefaultAsync<(string? ManagerOID, string? SuperUnitOID)>(
+                            "SELECT [managerOID], [superUnitOID] FROM [OrganizationUnit] WHERE [OID] = @OID",
+                            new { OID = organizationUnitOID },
+                            transaction);
+                        string? specifiedManagerOID = deptManagerRow.ManagerOID;
+                        if (!string.IsNullOrEmpty(specifiedManagerOID) &&
+                            string.Equals(specifiedManagerOID, leaderUserOID, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var resolved = await ResolveNonSelfManagerOIDAsync(connection, transaction, organizationUnitOID, leaderUserOID);
+                            specifiedManagerOID = !string.IsNullOrEmpty(resolved) ? resolved : leaderUserOID;
+                        }
+
+                        // 6. UPSERT（比對鍵：occupantOID + organizationUnitOID，isMain=0）
+                        var existingOID = await connection.QueryFirstOrDefaultAsync<string>(
+                            "SELECT [OID] FROM [Functions] WHERE [occupantOID] = @OccupantOID AND [organizationUnitOID] = @OrgUnitOID",
+                            new { OccupantOID = leaderUserOID, OrgUnitOID = organizationUnitOID },
+                            transaction);
+
+                        if (!string.IsNullOrEmpty(existingOID))
+                        {
+                            await connection.ExecuteAsync(@"
+                                UPDATE [Functions] SET
+                                    [definitionOID]       = @DefinitionOID,
+                                    [approvalLevelOID]    = @ApprovalLevelOID,
+                                    [specifiedManagerOID] = @SpecifiedManagerOID,
+                                    [isMain]              = 0,
+                                    [objectVersion]       = [objectVersion] + 1
+                                WHERE [OID] = @OID",
+                                new
+                                {
+                                    OID = existingOID,
+                                    DefinitionOID = mainFunction.DefinitionOID,
+                                    ApprovalLevelOID = (object?)mainFunction.ApprovalLevelOID ?? DBNull.Value,
+                                    SpecifiedManagerOID = (object?)specifiedManagerOID ?? DBNull.Value
+                                },
+                                transaction);
+
+                            _logger.LogSyncDetail("Functions(兼職主管)", "UPDATE", dept.LeaderEmpNo!, true);
+                            _logger.LogSyncRecord("Functions",
+                                $"OID={existingOID} (兼職), occupantOID={leaderUserOID}, organizationUnitOID={organizationUnitOID} ({dept.DeptCode}), " +
+                                $"definitionOID={mainFunction.DefinitionOID}, approvalLevelOID={mainFunction.ApprovalLevelOID ?? "NULL"}, " +
+                                $"specifiedManagerOID={specifiedManagerOID ?? "NULL"}, isMain=0 (UPDATE)");
+                        }
+                        else
+                        {
+                            var newOID = await GenerateUniqueOIDAsync(connection, transaction,
+                                "Functions", "Users", "Employee", "OrganizationUnit", "Organization",
+                                "OrganizationUnitLevel", "FunctionDefinition", "FunctionLevel");
+
+                            await connection.ExecuteAsync(@"
+                                INSERT INTO [Functions] (
+                                    [OID], [objectVersion], [approvalLevelOID], [definitionOID],
+                                    [occupantOID], [organizationUnitOID], [specifiedManagerOID], [isMain]
+                                ) VALUES (
+                                    @OID, 1, @ApprovalLevelOID, @DefinitionOID,
+                                    @OccupantOID, @OrgUnitOID, @SpecifiedManagerOID, 0
+                                )",
+                                new
+                                {
+                                    OID = newOID,
+                                    ApprovalLevelOID = (object?)mainFunction.ApprovalLevelOID ?? DBNull.Value,
+                                    DefinitionOID = mainFunction.DefinitionOID,
+                                    OccupantOID = leaderUserOID,
+                                    OrgUnitOID = organizationUnitOID,
+                                    SpecifiedManagerOID = (object?)specifiedManagerOID ?? DBNull.Value
+                                },
+                                transaction);
+
+                            _logger.LogSyncDetail("Functions(兼職主管)", "INSERT", dept.LeaderEmpNo!, true);
+                            _logger.LogSyncRecord("Functions",
+                                $"OID={newOID} (兼職新增), occupantOID={leaderUserOID}, organizationUnitOID={organizationUnitOID} ({dept.DeptCode}), " +
+                                $"definitionOID={mainFunction.DefinitionOID}, approvalLevelOID={mainFunction.ApprovalLevelOID ?? "NULL"}, " +
+                                $"specifiedManagerOID={specifiedManagerOID ?? "NULL"}, objectVersion=1, isMain=0");
+                        }
+
+                        result.SuccessCount++;
+
+                        if (processedCount % 100 == 0)
+                            _logger.Info($"[{GetDatabaseName()}] Functions(兼職主管) 同步進度: {processedCount}/{deptsWithLeader.Count}");
+                    }
+                    catch (Exception ex)
+                    {
+                        result.FailedCount++;
+                        result.Errors.Add($"部門 {dept.DeptCode} 兼職主管 {dept.LeaderEmpNo}: {ex.Message}");
+                        _logger.LogSyncDetail("Functions(兼職主管)", "SYNC", dept.LeaderEmpNo ?? dept.DeptCode, false, ex.Message);
+                    }
+                }
+
+                transaction.Commit();
+                result.Success = true;
+                _logger.LogSyncEnd($"Functions兼職主管 ({GetDatabaseName()})", result.TotalCount, result.SuccessCount, result.FailedCount);
+            }
+            catch (Exception ex)
+            {
+                transaction.Rollback();
+                result.Success = false;
+                _logger.Error($"[{GetDatabaseName()}] 同步 Functions(兼職主管) 資料時發生錯誤，已回滾", ex);
                 throw;
             }
 

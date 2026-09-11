@@ -173,6 +173,13 @@ namespace Sync104ToBpmErp.Services
         /// <summary>
         /// 取得所有員工資料 (依時間範圍)
         /// 注意：companyId 不再有 fallback，必須由呼叫端提供（從 /api/os/company 取得）
+        ///
+        /// 2026-09-07 修正：原本用 C_SDATETIME/C_EDATETIME（新增日期）篩選，但這只抓得到
+        /// 「新進員工」，抓不到「既有員工被異動」(調部門、換主管、升職等)——這類異動只會反映在
+        /// E_DATETIME（維護日期），不會改變 C_DATETIME（新增日期，建檔後永遠不變）。
+        /// 對正式 104 API 直接查證：員工 10101125 的 C_DATETIME=2025/12/11，E_DATETIME=2025/12/17
+        /// （確實有被異動過），但用新增日期篩選永遠篩不到她，導致她部門異動後的資料一直沒被重新同步。
+        /// 改用 E_SDATETIME/E_EDATETIME（維護日期），可同時涵蓋新增與異動兩種情況。
         /// </summary>
         public async Task<List<Employee>> GetEmployeesAsync(DateTime startTime, DateTime endTime, long? companyId = null)
         {
@@ -190,12 +197,13 @@ namespace Sync104ToBpmErp.Services
                 var endTimeStr = endTime.ToString("yyyy-MM-dd HH:mm:ss");
 
                 // 建立 POST 請求內容，符合 104 HR Max API 規格
+                // (改用維護日期 E_SDATETIME/E_EDATETIME 篩選，同時涵蓋新增與異動)
                 var requestBody = new
                 {
                     ACCESS_TOKEN = _accessToken,
                     CO_ID = coId,
-                    C_SDATETIME = startTimeStr,
-                    C_EDATETIME = endTimeStr
+                    E_SDATETIME = startTimeStr,
+                    E_EDATETIME = endTimeStr
                 };
 
                 var content = new StringContent(
@@ -204,7 +212,7 @@ namespace Sync104ToBpmErp.Services
                     "application/json");
 
                 _logger.Info($"[HR API] 正在呼叫員工資料 API: {_settings.EmployeeEndpoint} (CO_ID={coId})");
-                _logger.Info($"[HR API] 查詢時間範圍: {startTime:yyyy-MM-dd HH:mm:ss} ~ {endTime:yyyy-MM-dd HH:mm:ss}");
+                _logger.Info($"[HR API] 查詢時間範圍 (依維護日期 E_DATETIME): {startTime:yyyy-MM-dd HH:mm:ss} ~ {endTime:yyyy-MM-dd HH:mm:ss}");
 
                 var response = await _httpClient.PostAsync(_settings.EmployeeEndpoint, content);
                 EnsureApiSuccess(response, "員工資料 API", coId);
@@ -242,16 +250,17 @@ namespace Sync104ToBpmErp.Services
         }
 
         /// <summary>
-        /// 取得所有部門資料
+        /// 取得所有部門資料 (依時間範圍)
         /// 注意：companyId 不再有 fallback，必須由呼叫端提供（從 /api/os/company 取得）
         ///
-        /// 2026-09-03 修改：原本用 E_SDATETIME/E_EDATETIME 做「異動時間區間」增量查詢，
-        /// 但部門的異動時間戳記不一定會如預期反映每一種欄位變更（例如主管改派），
-        /// 導致部門明明已在 HR 端更新，卻因為不在查詢區間內而被 104 API 濾掉、完全抓不到，
-        /// BPM 的 managerOID 跟衍生的直屬主管欄位因此不會更新。
-        /// 部門數量遠少於員工，改成比照 GetDeptHierarchyAsync() 每次都抓全部，
-        /// 靠既有 UPSERT 邏輯處理，避免漏抓任何異動。startTime/endTime 參數保留簽章相容性，
-        /// 但不再傳給 API。
+        /// 2026-09-03 曾一度改成每次抓全部（不帶時間參數），原因是當時測試一直抓到 0 筆部門，
+        /// 懷疑 E_SDATETIME/E_EDATETIME 篩選不可靠。
+        /// 2026-09-07 直接對 104 API 實測釐清：E_SDATETIME/E_EDATETIME 篩選其實運作正常
+        /// （用 10 年寬範圍與用剛好涵蓋實際 E_DATETIME 的窄範圍，兩者回傳筆數一致），
+        /// 先前持續抓到 0 筆單純是因為測試當時用的查詢區間不夠寬，涵蓋不到部門實際的維護日期，
+        /// 跟員工那邊「用錯欄位(C_ 而非 E_)」是不同的病根。故改回依時間區間查詢（沿用
+        /// E_SDATETIME/E_EDATETIME，跟員工共用同一個 startTime/endTime，也就是共用
+        /// appsettings.json 的 BeginDays 設定），不用每次都抓全部。
         /// </summary>
         public async Task<List<Department>> GetDepartmentsAsync(DateTime startTime, DateTime endTime, long? companyId = null)
         {
@@ -264,15 +273,20 @@ namespace Sync104ToBpmErp.Services
 
                 var coId = companyId.Value;
 
+                // 格式化時間參數 (yyyy-MM-dd HH:mm:ss 格式)
+                var startTimeStr = startTime.ToString("yyyy-MM-dd HH:mm:ss");
+                var endTimeStr = endTime.ToString("yyyy-MM-dd HH:mm:ss");
+
                 // 建立 POST 請求內容，符合 104 HR Max API 規格
                 // 參考文件: /api/os/dept 需要 ORG_TYPE_CODE 和 BASE_DATE
-                // (不再帶 E_SDATETIME/E_EDATETIME，每次都抓全部部門，避免漏抓異動)
                 var requestBody = new
                 {
                     ACCESS_TOKEN = _accessToken,
                     CO_ID = coId,
                     ORG_TYPE_CODE = _settings.OrgTypeCode,
-                    BASE_DATE = _settings.BaseDate
+                    BASE_DATE = _settings.BaseDate,
+                    E_SDATETIME = startTimeStr,
+                    E_EDATETIME = endTimeStr
                 };
 
                 var content = new StringContent(
@@ -281,7 +295,7 @@ namespace Sync104ToBpmErp.Services
                     "application/json");
 
                 _logger.Info($"[HR API] 正在呼叫部門資料 API: {_settings.DepartmentEndpoint} (CO_ID={coId})");
-                _logger.Info($"[HR API] 抓取全部部門資料 (不使用時間區間篩選)");
+                _logger.Info($"[HR API] 查詢時間範圍 (依維護日期 E_DATETIME): {startTime:yyyy-MM-dd HH:mm:ss} ~ {endTime:yyyy-MM-dd HH:mm:ss}");
 
                 var response = await _httpClient.PostAsync(_settings.DepartmentEndpoint, content);
                 EnsureApiSuccess(response, "部門資料 API", coId);

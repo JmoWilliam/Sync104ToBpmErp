@@ -511,6 +511,9 @@ namespace Sync104ToBpmErp.Services
         public Task<SyncResult> SyncEmployeeFunctionsAsync(List<Employee> employees, long coId)
             => Task.FromResult(new SyncResult { DataType = "Functions", TargetSystem = "ERP(跳過)" });
 
+        public Task<SyncResult> SyncConcurrentDeptHeadFunctionsAsync(List<Department> departments, long coId, string coCode)
+            => Task.FromResult(new SyncResult { DataType = "Functions(兼職主管)", TargetSystem = "ERP(跳過)" });
+
         #endregion
     }
 }

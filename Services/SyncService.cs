@@ -8,9 +8,10 @@ namespace Sync104ToBpmErp.Services
     /// 對照表: api_erp_bpm_mapping.md
     ///
     /// 同步項目:
-    ///   BPM: OrganizationUnit, OrganizationUnitLevel, Users, Employee, Functions
+    ///   BPM: OrganizationUnit, Users, Employee, Functions
     ///   ERP: gem_file, abd_file, gen_file
-    /// 不同步: Organization, geu_file, FunctionDefinition, FunctionLevel (已在管理端建立)
+    /// 不同步: Organization, geu_file, OrganizationUnitLevel, FunctionDefinition, FunctionLevel
+    ///        (已在管理端建立；OrganizationUnitLevel 2026-09-07 起改為僅查詢比對，不再寫入)
     /// </summary>
     public class SyncService
     {
@@ -97,10 +98,15 @@ namespace Sync104ToBpmErp.Services
                         await SyncDeptHierarchyAsync(coId, coCode, report);
 
                         // ─── 2.2 部門資料 (dept API → BPM OrganizationUnit + ERP gem_file + ERP abd_file) ───
-                        await SyncDepartmentsAsync(startTime, endTime, coId, coCode, report);
+                        var departments = await SyncDepartmentsAsync(startTime, endTime, coId, coCode, report);
 
                         // ─── 2.3 員工資料 (emp API → BPM Users+Employee + ERP gen_file) ───
                         await SyncEmployeesAsync(startTime, endTime, coId, report);
+
+                        // ─── 2.4 部門兼職主管 (dept.LEADER_EMP_NO 本業不在該部門時，補一筆 isMain=0 的 Functions) ───
+                        //     需排在 2.3 之後：兼職主管的核決層級/職稱是沿用他自己「本職」的 Functions 記錄，
+                        //     本職記錄要先存在才查得到。
+                        await SyncConcurrentDeptHeadsAsync(departments, coId, coCode, report);
                     }
                     catch (HrApiPermissionDeniedException ex)
                     {
@@ -172,8 +178,9 @@ namespace Sync104ToBpmErp.Services
         /// <summary>
         /// 2.1 同步部門資料
         ///     寫入: BPM OrganizationUnit + ERP gem_file + ERP abd_file
+        ///     回傳這次抓到的部門清單，供之後 2.4 兼職主管同步重複使用，不用再多打一次 API
         /// </summary>
-        private async Task SyncDepartmentsAsync(DateTime startTime, DateTime endTime, long coId, string coCode, SyncReport report)
+        private async Task<List<Department>> SyncDepartmentsAsync(DateTime startTime, DateTime endTime, long coId, string coCode, SyncReport report)
         {
             _logger.LogSyncStart($"Department (CO_ID={coId})", startTime, endTime);
 
@@ -185,7 +192,7 @@ namespace Sync104ToBpmErp.Services
                 if (departments.Count == 0)
                 {
                     _logger.Warning($"[HR API] 無部門資料 (CO_ID={coId})，跳過");
-                    return;
+                    return departments;
                 }
 
                 _logger.Info($"[同步處理] 取得 {departments.Count} 筆部門資料 (CO_ID={coId})");
@@ -209,6 +216,8 @@ namespace Sync104ToBpmErp.Services
                     $"BPM: {bpmResult.SuccessCount}/{bpmResult.TotalCount}, " +
                     $"ERP gem: {erpResult.SuccessCount}/{erpResult.TotalCount}, " +
                     $"ERP abd: {abdResult.SuccessCount}/{abdResult.TotalCount}");
+
+                return departments;
             }
             catch (HrApiPermissionDeniedException)
             {
@@ -316,6 +325,39 @@ namespace Sync104ToBpmErp.Services
                 throw;
             }
         }
+
+        /// <summary>
+        /// 2.4 同步部門「兼職主管」到 BPM Functions（isMain=0）
+        /// 2026-09-09 新增：104 部門資料的 LEADER_EMP_NO 不一定等於該主管自己的 DEPT1_CODE
+        /// (例如黃嘉偉本業掛在 A0440，卻是 A0443 的部門主管)，這種情況屬於兼職，
+        /// 2.3 的主同步只會處理主管自己 DEPT1_CODE 對應的那筆 Functions (isMain=1)，
+        /// 不會建立/更新兼職部門這筆，導致兼職那筆資料一直停留在建立當下的舊值。
+        /// 直接用 2.2 已經抓到的部門清單，逐一檢查 LEADER_EMP_NO 是否為兼職，是的話補上/更新
+        /// isMain=0 的 Functions 記錄。
+        /// </summary>
+        private async Task SyncConcurrentDeptHeadsAsync(List<Department> departments, long coId, string coCode, SyncReport report)
+        {
+            if (departments == null || departments.Count == 0) return;
+
+            try
+            {
+                _logger.Info($"[同步處理] 正在同步部門兼職主管到 BPM (Functions, isMain=0)... (CO_ID={coId})");
+                var result = await _bpmDatabaseService.SyncConcurrentDeptHeadFunctionsAsync(departments, coId, coCode);
+                report.SetBpmConcurrentHeadResult(coId, result);
+
+                _logger.Info($"[同步完成] 部門兼職主管同步完成 (CO_ID={coId}) - " +
+                    $"BPM: {result.SuccessCount}/{result.TotalCount} (跳過 {result.SkippedCount})");
+            }
+            catch (HrApiPermissionDeniedException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"[同步錯誤] 同步部門兼職主管時發生錯誤 (CO_ID={coId})", ex);
+                throw;
+            }
+        }
     }
 
     /// <summary>
@@ -337,6 +379,7 @@ namespace Sync104ToBpmErp.Services
         public Dictionary<long, SyncResult> BpmHierarchyResults { get; set; } = new();
         public Dictionary<long, SyncResult> BpmEmployeeResults { get; set; } = new();
         public Dictionary<long, SyncResult> BpmFunctionsResults { get; set; } = new();
+        public Dictionary<long, SyncResult> BpmConcurrentHeadResults { get; set; } = new();
 
         // ERP 各表結果（以公司 CO_ID 為 key）
         public Dictionary<long, SyncResult> ErpDepartmentResults { get; set; } = new();
@@ -347,6 +390,7 @@ namespace Sync104ToBpmErp.Services
         public void SetBpmHierarchyResult(long coId, SyncResult r) => BpmHierarchyResults[coId] = r;
         public void SetBpmEmployeeResult(long coId, SyncResult r) => BpmEmployeeResults[coId] = r;
         public void SetBpmFunctionsResult(long coId, SyncResult r) => BpmFunctionsResults[coId] = r;
+        public void SetBpmConcurrentHeadResult(long coId, SyncResult r) => BpmConcurrentHeadResults[coId] = r;
         public void SetErpDepartmentResult(long coId, SyncResult r) => ErpDepartmentResults[coId] = r;
         public void SetErpHierarchyResult(long coId, SyncResult r) => ErpHierarchyResults[coId] = r;
         public void SetErpEmployeeResult(long coId, SyncResult r) => ErpEmployeeResults[coId] = r;
@@ -380,6 +424,8 @@ namespace Sync104ToBpmErp.Services
                 sb.AppendLine($"  員工 Employee+Users(CO_ID={kv.Key}): 新增 {kv.Value.SuccessCount}/{kv.Value.TotalCount}, 跳過(已存在) {kv.Value.SkippedCount}");
             foreach (var kv in BpmFunctionsResults)
                 sb.AppendLine($"  職稱/簽核 Functions(CO_ID={kv.Key}): 成功 {kv.Value.SuccessCount}/{kv.Value.TotalCount}, 跳過(缺職稱/部門對應) {kv.Value.SkippedCount}");
+            foreach (var kv in BpmConcurrentHeadResults)
+                sb.AppendLine($"  兼職主管 Functions(CO_ID={kv.Key}): 成功 {kv.Value.SuccessCount}/{kv.Value.TotalCount}, 跳過 {kv.Value.SkippedCount}");
             sb.AppendLine();
 
             // ERP 結果
@@ -398,6 +444,7 @@ namespace Sync104ToBpmErp.Services
             foreach (var kv in BpmHierarchyResults) allErrors.AddRange(kv.Value.Errors);
             foreach (var kv in BpmEmployeeResults) allErrors.AddRange(kv.Value.Errors);
             foreach (var kv in BpmFunctionsResults) allErrors.AddRange(kv.Value.Errors);
+            foreach (var kv in BpmConcurrentHeadResults) allErrors.AddRange(kv.Value.Errors);
             foreach (var kv in ErpDepartmentResults) allErrors.AddRange(kv.Value.Errors);
             foreach (var kv in ErpHierarchyResults) allErrors.AddRange(kv.Value.Errors);
             foreach (var kv in ErpEmployeeResults) allErrors.AddRange(kv.Value.Errors);
