@@ -230,6 +230,20 @@ namespace Sync104ToBpmErp.Services
 
                         if (!string.IsNullOrEmpty(existingOid))
                         {
+                            // 2026-10-06 修正：104 DEPT_LEVEL_NAME 一律是「處/部/課」這類組織職級名稱，
+                            // 但實測發現目前所有公司 BPM OrganizationUnitLevel.organizationUnitLevelName
+                            // 其實是「主管簽核 (依縮排代表簽核層級深度)」或純數字，跟 104 這邊完全是兩套不同的命名，
+                            // 字串永遠比對不到——如果比對不到就寫 NULL，等於每次同步都會把既有 (BPM 管理端維護) 的
+                            // levelOID 覆蓋掉，是比 2026-09-11 那次修正之前更嚴重的回歸。
+                            // 比對不到前先查詢現有值，查不到新值時維持原值，絕不用 NULL 覆蓋既有設定。
+                            if (string.IsNullOrEmpty(levelOID))
+                            {
+                                levelOID = await connection.QueryFirstOrDefaultAsync<string>(
+                                    "SELECT [levelOID] FROM [OrganizationUnit] WHERE [OID] = @OID",
+                                    new { OID = existingOid },
+                                    transaction);
+                            }
+
                             // ── 資料已存在 — UPDATE (2026-07-16 依客戶回覆 DataMappingUserConfirm20260716.xlsx 啟用)
                             //    僅更新客戶確認需要異動的欄位: organizationUnitName, managerOID, superUnitOID, levelOID, validType
                             //    organizationOID 客戶未勾選需要更新 (理論上部門不會換公司)，維持原值不動 ──
@@ -1134,15 +1148,51 @@ namespace Sync104ToBpmErp.Services
                             continue;
                         }
 
-                        // 4. 沿用主管自己「本職」(isMain=1) 的職稱/核決層級；查不到代表他還沒被同步過，先跳過
-                        var mainFunction = await connection.QueryFirstOrDefaultAsync<(string? DefinitionOID, string? ApprovalLevelOID)>(
-                            "SELECT TOP 1 [definitionOID], [approvalLevelOID] FROM [Functions] WHERE [occupantOID] = @OccupantOID AND [isMain] = 1",
-                            new { OccupantOID = leaderUserOID },
-                            transaction);
+                        // 4. 決定這筆兼職記錄的職稱/核決層級。
+                        //    2026-10-06 修正：原本一律沿用主管自己「本職」的職稱，但本職職稱只反映他自己原本
+                        //    所在部門的職級（例如陳俊儒本職都是「處長」），跟兼職部門自己的職級（部→經理、課→課長）
+                        //    無關——直接照抄本職會讓「部」「課」級的兼職部門全部被塞成「處長」，是錯的。
+                        //    改成先依「兼職部門自己的 104 DEPT_LEVEL_NAME」(處/部/課) 比照公司慣例
+                        //    (處→處長、部→經理、課→課長) 去查同公司的 FunctionDefinition/FunctionLevel，
+                        //    查到才用；查不到 (名稱對不上慣例，或該職稱在這間公司不存在) 才 fallback 回本職職稱。
+                        (string? DefinitionOID, string? ApprovalLevelOID) mainFunction = (null, null);
+
+                        string? conventionalTitle = dept.DeptLevelName?.Trim() switch
+                        {
+                            "處" => "處長",
+                            "部" => "經理",
+                            "課" => "課長",
+                            _ => null
+                        };
+
+                        if (!string.IsNullOrEmpty(conventionalTitle))
+                        {
+                            var byConvention = await connection.QueryFirstOrDefaultAsync<(string? DefinitionOID, string? ApprovalLevelOID)>(@"
+                                SELECT fd.[OID] AS DefinitionOID, fl.[OID] AS ApprovalLevelOID
+                                FROM [FunctionDefinition] fd
+                                LEFT JOIN [FunctionLevel] fl
+                                    ON fl.[functionLevelName] = fd.[functionDefinitionName] AND fl.[organizationOID] = fd.[organizationOID]
+                                WHERE fd.[functionDefinitionName] = @Title AND fd.[organizationOID] = @CompanyOID",
+                                new { Title = conventionalTitle, CompanyOID = companyOID },
+                                transaction);
+
+                            if (!string.IsNullOrEmpty(byConvention.DefinitionOID))
+                                mainFunction = byConvention;
+                        }
+
+                        // fallback：查不到慣例職稱時，沿用主管自己「本職」(isMain=1) 的職稱/核決層級
+                        if (string.IsNullOrEmpty(mainFunction.DefinitionOID))
+                        {
+                            mainFunction = await connection.QueryFirstOrDefaultAsync<(string? DefinitionOID, string? ApprovalLevelOID)>(
+                                "SELECT TOP 1 [definitionOID], [approvalLevelOID] FROM [Functions] WHERE [occupantOID] = @OccupantOID AND [isMain] = 1",
+                                new { OccupantOID = leaderUserOID },
+                                transaction);
+                        }
+
                         if (string.IsNullOrEmpty(mainFunction.DefinitionOID))
                         {
                             result.SkippedCount++;
-                            _logger.Warning($"[BPM] Functions(兼職主管) 略過 部門{dept.DeptCode}主管{dept.LeaderEmpNo}: 查不到主管本職的職稱，無法決定兼職記錄的 definitionOID (該主管可能尚未被同步過)");
+                            _logger.Warning($"[BPM] Functions(兼職主管) 略過 部門{dept.DeptCode}主管{dept.LeaderEmpNo}: 查不到慣例職稱({conventionalTitle ?? "無"})也查不到主管本職的職稱，無法決定兼職記錄的 definitionOID (該主管可能尚未被同步過)");
                             continue;
                         }
 

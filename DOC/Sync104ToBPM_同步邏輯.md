@@ -57,6 +57,16 @@ UPSERT 判斷鍵：`id`（DEPT_CODE）
 > 兩者是完全不同的數字空間，比對永遠對不上，導致 `levelOID` 一律寫成 `NULL`——用正式資料庫還原比對
 > 才發現這個問題，而且會把既有正確的 `levelOID` 覆蓋掉。已改用**層級名稱**比對
 > （104 `DEPT_LEVEL_NAME` ↔ BPM `organizationUnitLevelName`，限定同一公司），名稱才是兩邊真正對得上的欄位。
+>
+> **2026-10-06 修正（比 09-11 那次更嚴重的回歸）**：客戶資料庫重置後直接查證才發現，104
+> `DEPT_LEVEL_NAME` 的值一律是「處/部/課」這類**組織職級名稱**，但 BPM 這邊
+> `OrganizationUnitLevel.organizationUnitLevelName` 實際存的是「主管簽核（依縮排表示簽核深度 0~5）」
+> 或純數字——查證了所有公司（0001~0011），沒有一間公司的命名是「處/部/課」。也就是說
+> 09-11 那次的名稱比對邏輯**從一開始就不會比對成功**，一旦重跑，每個部門都會因為查無比對而把
+> 既有（BPM 管理端維護）的 `levelOID` 覆蓋成 `NULL`。已修正為：查無比對結果時，先查詢該部門現有的
+> `levelOID`，查不到新值就維持原值，絕不用 `NULL` 覆蓋既有設定（[BpmDatabaseService.cs](../Services/BpmDatabaseService.cs)
+> `SyncOrganizationUnitsAsync`）。104 的部門職級與 BPM 的簽核深度本來就是兩個不同概念，目前沒有
+> 可靠的自動對應規則，之後如果要真正同步 `levelOID`，需要客戶額外提供兩邊的對應表。
 
 ---
 
@@ -133,10 +143,21 @@ UPSERT 判斷鍵：`occupantOID` + `organizationUnitOID`
 
 104 部門的 `LEADER_EMP_NO` 不一定等於該主管自己的 `DEPT1_CODE`（甚至可能跨公司，例如集團董事長被指定管理海外子公司的董事長室，但 104 從未把他登記成那家公司的員工）。這種情況下：
 
-1. 幫他在**掛名部門**補一筆 `isMain=0` 的 `Functions` 記錄，職稱/核決層級沿用他自己「本職」(`isMain=1`) 的 Functions 記錄。
+1. 幫他在**掛名部門**補一筆 `isMain=0` 的 `Functions` 記錄。
 2. 若他在**該部門所屬公司底下完全沒有 `Employee` 記錄**（跨公司掛名的情況），額外補一筆 `Employee`（`organizationOID`=該公司），因為實測證實 BPM 展開部門時，會對部門底下每個 `Functions` 佔用者查 `Users+Employee WHERE Employee.organizationOID=該公司`，查無資料會導致 BPM 後端接口調用失敗、整個部門展開不了。客戶已確認正式環境允許「分公司掛不隸屬該公司的人當部門主管」，所以主動補資料而非等 104 修正。
 
 實作：`SyncConcurrentDeptHeadFunctionsAsync`（[BpmDatabaseService.cs](../Services/BpmDatabaseService.cs)），排在 `SyncEmployeeFunctionsAsync` 之後執行。
+
+> **2026-10-06 修正（兼職職稱判斷邏輯錯誤）**：原本「職稱/核決層級沿用他自己本職」的邏輯是
+> `SELECT TOP 1 ... WHERE occupantOID=X AND isMain=1`（沒有 `ORDER BY`），直接把本職職稱整個
+> 照抄到所有兼職部門——但本職職稱只反映他自己原本所在部門的職級，跟兼職部門自己的職級無關。
+> 用客戶重置後的正式資料實測：陳俊儒在公司 0001 的本職是「總管理處」的「處長」，若兼職
+> A0350市場行銷部（部級，應為經理）、A0351市場行銷課（課級，應為課長），照抄邏輯會讓兩個
+> 兼職部門都被寫成「處長」——跟公司既有慣例（部→經理、課→課長、處→處長，可由陳俊儒本人
+> 在其他公司既有的合法兼職記錄驗證）不符。
+> 已改為：先依**兼職部門自己的** 104 `DEPT_LEVEL_NAME`（處/部/課）比照慣例（處→處長、部→經理、
+> 課→課長）去查同公司的 `FunctionDefinition`/`FunctionLevel`，查到才用；查不到（職稱名稱對不上慣例，
+> 或該公司沒有這個職稱）才 fallback 回原本「照抄本職」的邏輯。
 
 ---
 
