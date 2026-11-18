@@ -52,6 +52,15 @@ namespace Sync104ToBpmErp.Services
         /// </summary>
         Task<SyncResult> SyncEmployeeFunctionsAsync(List<Employee> employees, long coId);
 
+        /// <summary>
+        /// BPM: 同步部門「兼職/掛名主管」到 Functions 表 (isMain=0)，並在跨公司掛名時
+        /// 一併補上 Employee 記錄（主管在該部門所屬公司底下缺少 Employee 記錄時，
+        /// BPM 展開該部門會因查無資料而失敗，客戶已確認正式環境允許此種掛名情境）。
+        /// 適用於 104 部門的 LEADER_EMP_NO 本業不在該部門 (DEPT1_CODE 不同，甚至不同公司) 的情況，
+        /// 需在 SyncEmployeeFunctionsAsync 之後執行，才能查到該主管本職的職稱/核決層級可供沿用。
+        /// </summary>
+        Task<SyncResult> SyncConcurrentDeptHeadFunctionsAsync(List<Department> departments, long coId, string coCode);
+
         // ─── ERP ───
 
         /// <summary>
